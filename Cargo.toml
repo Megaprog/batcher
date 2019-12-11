@@ -1,0 +1,24 @@
+[package]
+name = "batcher"
+version = "0.1.0"
+authors = ["Tomas Shestakov <shestakovte@gmail.com>"]
+edition = "2018"
+license = "MIT"
+description = "Samples for Rust Programming Language book"
+homepage = "TODO"
+
+#[profile.release]
+#panic = 'abort'
+
+#[profile.dev]
+#panic = "unwind"
+
+#[workspace]
+
+[dependencies]
+miniz_oxide = "0.3.2"
+json = "0.12.0"
+log = "0.4.8"
+
+[dev-dependencies]
+env_logger = "0.7.1"
