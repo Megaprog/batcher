@@ -116,7 +116,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
             failed_upload_timeout: Duration::from_secs(1),
 
             shared_state: Arc::new(Mutex::new(BatcherSharedState {
-                stopped: false,
+                stopped: true,
                 hard_stop: false,
                 soft_stop: false,
                 last_flush_time: SystemTime::UNIX_EPOCH,
@@ -155,6 +155,7 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
             return false;
         }
 
+        guard.stopped = false;
         guard.last_flush_time = (self.clock)();
 
         let mut cloned_batcher = self.clone();
