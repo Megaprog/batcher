@@ -21,7 +21,7 @@ impl<R> BatchFactory<R> for fn(R, i64) -> io::Result<BinaryBatch> {
     }
 }
 
-pub trait BatchStorage<B: Deref<Target=BinaryBatch>> {
+pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone {
     fn store<R>(&mut self, records: R, batch_factory: impl BatchFactory<R>) -> io::Result<()>;
     fn get(&self) -> io::Result<B>;
     fn remove(&mut self) -> io::Result<()>;
