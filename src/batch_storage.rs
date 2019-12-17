@@ -11,17 +11,17 @@ pub struct BinaryBatch {
     pub bytes: Vec<u8>
 }
 
-pub trait BatchFactory<R> {
+pub trait BatchFactory<R>: Clone + Send + 'static {
     fn create_batch(&self, records: R, batch_id: i64) -> io::Result<BinaryBatch>;
 }
 
-impl<R> BatchFactory<R> for fn(R, i64) -> io::Result<BinaryBatch> {
+impl<R: 'static> BatchFactory<R> for fn(R, i64) -> io::Result<BinaryBatch> {
     fn create_batch(&self, records: R, batch_id: i64) -> io::Result<BinaryBatch> {
         self(records, batch_id)
     }
 }
 
-pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone {
+pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone + Send + 'static {
     fn store<R>(&mut self, records: R, batch_factory: impl BatchFactory<R>) -> io::Result<()>;
     fn get(&self) -> io::Result<B>;
     fn remove(&mut self) -> io::Result<()>;
@@ -29,7 +29,7 @@ pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone {
     fn is_empty(&self) -> bool;
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GzippedDisplayBatchFactory<T> {
     server_id: String,
     phantom: PhantomData<T>
@@ -44,7 +44,7 @@ impl<T> GzippedDisplayBatchFactory<T> {
     }
 }
 
-impl<R: Display> BatchFactory<R> for GzippedDisplayBatchFactory<R> {
+impl<R: Display + Clone + Send + 'static> BatchFactory<R> for GzippedDisplayBatchFactory<R> {
     fn create_batch(&self, records: R, batch_id: i64) -> io::Result<BinaryBatch> {
         Ok(BinaryBatch {
             batch_id,

@@ -13,14 +13,14 @@ const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
 const DEFAULT_MAX_BATCH_BYTES: usize = 1024 * 1024;
 
 
-pub trait RecordsBuilder<T, R>: Clone {
+pub trait RecordsBuilder<T, R>: Clone + Send + 'static {
     fn add(&mut self, record: T);
     fn len(&self) -> u32;
     fn size(&self) -> usize;
     fn build(self) -> R;
 }
 
-pub trait RecordsBuilderFactory<T, R, Builder: RecordsBuilder<T, R>>: Clone {
+pub trait RecordsBuilderFactory<T, R, Builder: RecordsBuilder<T, R>>: Clone + Send + 'static {
     fn create_builder(&self) -> Builder;
 }
 
@@ -55,8 +55,8 @@ pub struct BatcherSharedState<T, Records, Builder: RecordsBuilder<T, Records>> {
     upload_thread: Option<JoinHandle<()>>,
     last_upload_result: io::Result<()>,
 
-    phantom_t: PhantomData<*const T>,
-    phantom_r: PhantomData<*const Records>,
+    phantom_t: PhantomData<T>,
+    phantom_r: PhantomData<Records>,
 }
 
 #[derive(Clone)]
@@ -64,7 +64,7 @@ pub struct BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Stor
     where
         Builder: RecordsBuilder<T, Records>,
         BuilderFactory: RecordsBuilderFactory<T, Records, Builder>,
-        Batch: Deref<Target=BinaryBatch>,
+        Batch: Deref<Target=BinaryBatch> + Clone,
         Factory: BatchFactory<Records>,
         Storage: BatchStorage<Batch>,
         Sender: BatchSender
@@ -84,9 +84,9 @@ pub struct BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Stor
 
     pub shared_state: Arc<Mutex<BatcherSharedState<T, Records, Builder>>>,
 
-    phantom_t: PhantomData<*const T>,
-    phantom_r: PhantomData<*const Records>,
-    phantom_b: PhantomData<*const Batch>,
+    phantom_t: PhantomData<T>,
+    phantom_r: PhantomData<Records>,
+    phantom_b: PhantomData<Batch>,
 }
 
 impl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
@@ -94,7 +94,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     where
         Builder: RecordsBuilder<T, Records>,
         BuilderFactory: RecordsBuilderFactory<T, Records, Builder>,
-        Batch: Deref<Target=BinaryBatch>,
+        Batch: Deref<Target=BinaryBatch> + Clone,
         Factory: BatchFactory<Records>,
         Storage: BatchStorage<Batch>,
         Sender: BatchSender
@@ -139,18 +139,18 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 }
 
-impl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender> Batcher<T> for
-BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
+impl<T: Clone + Send + 'static, Records: Clone + Send + 'static, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
+Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
     where
         Builder: RecordsBuilder<T, Records>,
         BuilderFactory: RecordsBuilderFactory<T, Records, Builder>,
-        Batch: Deref<Target=BinaryBatch>,
+        Batch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
         Factory: BatchFactory<Records>,
         Storage: BatchStorage<Batch>,
         Sender: BatchSender
 {
     fn start(&mut self) -> bool {
-        let guard = self.shared_state.lock().unwrap();
+        let mut guard = self.shared_state.lock().unwrap();
         if guard.upload_thread.is_some() {
             return false;
         }

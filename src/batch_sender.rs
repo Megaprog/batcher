@@ -1,6 +1,6 @@
 use std::io;
 
-pub trait BatchSender: Clone {
+pub trait BatchSender: Clone + Send + 'static {
     fn send_batch(&self, batch: &[u8]) -> io::Result<()>;
 }
 
