@@ -17,6 +17,7 @@ pub struct HeapStorageSharedState {
     occupied_bytes: usize,
     previous_batch_id: i64,
     interruption: Interruption,
+    stopped: bool,
 }
 
 pub struct HeapStorageSync {
@@ -99,6 +100,7 @@ impl NonBlockingHeapStorage {
                     occupied_bytes: 0,
                     previous_batch_id: 0,
                     interruption: Interruption { waiting: 0, interrupted: 0 },
+                    stopped: false,
                 }),
                 condvar: Condvar::new(),
             }),
@@ -115,6 +117,10 @@ impl HeapStorageThis for Base {
     }
 
     fn store_batch(&self, heap_storage: &NonBlockingHeapStorage, batch: BinaryBatch, mut guard: HeapStorageGuard) -> io::Result<()> {
+        if guard.stopped {
+            return Err(Error::new(ErrorKind::Interrupted, "The storage has been stopped"))
+        }
+
         if heap_storage.this.is_capacity_exceeded(heap_storage, &batch, &mut guard)? {
             return Err(Error::new(ErrorKind::Other, format!("Storage capacity {} exceeded by {}", heap_storage.max_bytes, batch.bytes.len())));
         }
@@ -174,6 +180,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
 
     fn shutdown(self) {
         let mut guard = HeapStorageGuard::from(&self.shared_state);
+        guard.stopped = true;
         guard.interrupt();
     }
 }
@@ -274,6 +281,12 @@ mod test_non_blocking_heap_storage {
         non_blocking_heap_storage.clock = || 1;
         crate::heap_storage::test::consumer_first(non_blocking_heap_storage);
     }
+
+    #[test]
+    fn shutdown() {
+        let mut non_blocking_heap_storage = NonBlockingHeapStorage::new();
+        crate::heap_storage::test::shutdown(non_blocking_heap_storage);
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +326,12 @@ mod test_heap_storage {
         heap_storage.0.clock = || 1;
         crate::heap_storage::test::consumer_first(heap_storage);
     }
+
+    #[test]
+    fn shutdown() {
+        let mut heap_storage = HeapStorage::new();
+        crate::heap_storage::test::shutdown(heap_storage);
+    }
 }
 
 #[cfg(test)]
@@ -322,6 +341,7 @@ mod test {
     use std::{thread, io};
     use std::time::Duration;
     use std::ops::Deref;
+    use std::io::ErrorKind;
 
     pub(crate) static BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
 
@@ -343,6 +363,27 @@ mod test {
 
         consumer_thread.join().unwrap();
 
+        assert!(heap_storage.is_empty());
+    }
+
+    pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(mut heap_storage: T) {
+        let mut cloned_storage = heap_storage.clone();
+        let consumer_thread = thread::spawn(move || {
+            let get_result = cloned_storage.get();
+            cloned_storage.remove();
+            get_result
+        });
+
+        thread::sleep(Duration::from_millis(1));
+        heap_storage.clone().shutdown();
+
+        let thread_result = consumer_thread.join().unwrap();
+        assert!(thread_result.is_err());
+        assert_eq!(ErrorKind::Interrupted, thread_result.err().unwrap().kind());
+
+        let store_result = heap_storage.store("Test".to_string(), BATCH_FACTORY);
+        assert!(store_result.is_err());
+        assert_eq!(ErrorKind::Interrupted, store_result.err().unwrap().kind());
         assert!(heap_storage.is_empty());
     }
 
