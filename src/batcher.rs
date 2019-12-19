@@ -5,14 +5,17 @@ use crate::batch_sender::BatchSender;
 use std::ops::Deref;
 use std::thread::JoinHandle;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::io::{Error, ErrorKind};
-use log::{trace, error};
+use log::*;
 
 
 const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
 const DEFAULT_MAX_BATCH_BYTES: usize = 1024 * 1024;
 
+pub fn duration_since(now: SystemTime, since: SystemTime) -> Duration {
+    now.duration_since(since).unwrap_or(Duration::from_secs(0))
+}
 
 pub trait RecordsBuilder<T, R>: Clone + Send + 'static {
     fn add(&mut self, record: T);
@@ -90,12 +93,12 @@ pub struct BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Stor
     phantom_b: PhantomData<Batch>,
 }
 
-impl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
+impl<T: Clone + Send + 'static, Records: Clone + Send + 'static, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
 BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
     where
         Builder: RecordsBuilder<T, Records>,
         BuilderFactory: RecordsBuilderFactory<T, Records, Builder>,
-        Batch: Deref<Target=BinaryBatch> + Clone,
+        Batch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
         Factory: BatchFactory<Records>,
         Storage: BatchStorage<Batch>,
         Sender: BatchSender
@@ -135,7 +138,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         }
     }
 
-    fn upload(&mut self) {
+    fn upload(mut self) {
         trace!("Upload starting...");
 
         let mut uploaded_batch_counter = 0;
@@ -146,29 +149,76 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
             let batch_result = self.batch_storage.get();
             if let Err(e) = batch_result {
                 if e.kind() == ErrorKind::Interrupted {
-                    if self.should_interrupt() {
-                        break
+                    if self.should_interrupt(self.shared_state.lock().unwrap()) {
+                        break;
                     } else {
-                        continue
+                        continue;
                     }
                 } else {
                     error!("Error while reading batch: {}", e);
                     thread::sleep(self.read_retry_timeout);
-                    continue
+                    continue;
                 }
             }
 
             all_batch_counter += 1;
             let batch = batch_result.unwrap();
 
-            trace!("Batch {} read time: {:?}", batch.batch_id,
-                   (self.clock)().duration_since(batch_read_start).unwrap_or(Duration::from_secs(0)));
+            trace!("{} read time: {:?}", *batch, self.since(batch_read_start));
 
+            loop {
+                let batch_upload_start = (self.clock)();
+                let send_result = self.batch_sender.send_batch(&batch.bytes);
+                if let Err(e) = send_result {
+                    error!("Unexpected exception while sending the {}: {}", *batch, e);
+                    self.shared_state.lock().unwrap() .last_upload_result = Err(e);
+                    self.stop();
+                    return;
+                }
+
+                debug!("{} finished. Took {:?}", *batch, self.since(batch_upload_start));
+
+                if let Ok(None) = send_result {
+                    trace!("{} successfully uploaded", *batch);
+                    uploaded_batch_counter += 1;
+                    send_batches_bytes += batch.bytes.len();
+
+                    self.try_remove(&batch);
+                    break;
+                }
+
+                warn!("Error while uploading {}: {}", *batch, send_result.unwrap().unwrap());
+
+                thread::sleep(self.failed_upload_timeout);
+
+                if !self.retry_batch_upload {
+                    self.try_remove(&batch);
+                    break;
+                }
+
+                info!("Retrying the {}", *batch);
+            }
+
+            let mutex_guard = self.shared_state.lock().unwrap();
+            if mutex_guard.stopped && self.should_interrupt(mutex_guard) {
+                break;
+            }
+        }
+
+        info!("{} from {} batches uploaded. Send {} bytes", uploaded_batch_counter, all_batch_counter, send_batches_bytes);
+    }
+
+    fn since(&self, since: SystemTime) -> Duration {
+        (self.clock)().duration_since(since).unwrap_or(Duration::from_secs(0))
+    }
+
+    fn try_remove(&mut self, batch: &Batch) {
+        if let Err(e) = self.batch_storage.remove() {
+            error!("Error while removing uploaded {}: {}", **batch, e);
         }
     }
 
-    fn should_interrupt(&self) -> bool {
-        let mutex_guard = self.shared_state.lock().unwrap();
+    fn should_interrupt(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> bool {
         mutex_guard.hard_stop || (self.batch_storage.is_persistent() && !mutex_guard.soft_stop) || self.batch_storage.is_empty()
     }
 }

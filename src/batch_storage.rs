@@ -1,5 +1,5 @@
 use std::io;
-use std::fmt::Display;
+use std::fmt::{Display, Formatter, Error};
 use std::marker::PhantomData;
 use miniz_oxide::deflate::{compress_to_vec, CompressionLevel};
 use std::ops::Deref;
@@ -9,6 +9,12 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 pub struct BinaryBatch {
     pub batch_id: i64,
     pub bytes: Vec<u8>
+}
+
+impl Display for BinaryBatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "BinaryBatch{{id: {}, len: {}}}", self.batch_id, self.bytes.len())
+    }
 }
 
 pub trait BatchFactory<R>: Clone + Send + 'static {
