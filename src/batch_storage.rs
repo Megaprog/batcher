@@ -27,6 +27,7 @@ pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone + Send + 'static {
     fn remove(&mut self) -> io::Result<()>;
     fn is_persistent(&self) -> bool;
     fn is_empty(&self) -> bool;
+    fn shutdown(self);
 }
 
 #[derive(Clone, Debug)]

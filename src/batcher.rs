@@ -6,7 +6,8 @@ use std::ops::Deref;
 use std::thread::JoinHandle;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
-use std::io::Error;
+use std::io::{Error, ErrorKind};
+use log::{trace, error};
 
 
 const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
@@ -135,7 +136,40 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 
     fn upload(&mut self) {
+        trace!("Upload starting...");
 
+        let mut uploaded_batch_counter = 0;
+        let mut all_batch_counter = 0;
+        let mut send_batches_bytes = 0;
+        loop {
+            let batch_read_start = (self.clock)();
+            let batch_result = self.batch_storage.get();
+            if let Err(e) = batch_result {
+                if e.kind() == ErrorKind::Interrupted {
+                    if self.should_interrupt() {
+                        break
+                    } else {
+                        continue
+                    }
+                } else {
+                    error!("Error while reading batch: {}", e);
+                    thread::sleep(self.read_retry_timeout);
+                    continue
+                }
+            }
+
+            all_batch_counter += 1;
+            let batch = batch_result.unwrap();
+
+            trace!("Batch {} read time: {:?}", batch.batch_id,
+                   (self.clock)().duration_since(batch_read_start).unwrap_or(Duration::from_secs(0)));
+
+        }
+    }
+
+    fn should_interrupt(&self) -> bool {
+        let mutex_guard = self.shared_state.lock().unwrap();
+        mutex_guard.hard_stop || (self.batch_storage.is_persistent() && !mutex_guard.soft_stop) || self.batch_storage.is_empty()
     }
 }
 

@@ -7,30 +7,50 @@ use std::ops::{Deref, DerefMut};
 
 const DEFAULT_MAX_BYTES_IN_QUEUE: usize = 64 * 1024 * 1024;
 
+pub struct Interruption {
+    waiting: i32,
+    interrupted: i32,
+}
+
 pub struct HeapStorageSharedState {
     batches_queue: VecDeque<Arc<BinaryBatch>>,
     occupied_bytes: usize,
     previous_batch_id: i64,
+    interruption: Interruption,
 }
 
 pub struct HeapStorageSync {
     mutex: Mutex<HeapStorageSharedState>,
-    condvar: Condvar
+    condvar: Condvar,
 }
 
 pub struct HeapStorageGuard<'a> {
     mutex_guard: Option<MutexGuard<'a, HeapStorageSharedState>>,
-    condvar: &'a Condvar
+    condvar: &'a Condvar,
 }
 
 impl<'a> HeapStorageGuard<'a> {
     fn from(storage_sync: &'a HeapStorageSync) -> HeapStorageGuard<'a> {
-        let HeapStorageSync { mutex, condvar} = storage_sync;
+        let HeapStorageSync { mutex, condvar, ..} = storage_sync;
         HeapStorageGuard { mutex_guard: Some(mutex.lock().unwrap()), condvar}
     }
 
-    fn wait(&mut self) {
+    fn wait(&mut self) -> io::Result<()> {
+        self.interruption.waiting += 1;
         self.mutex_guard = Some(self.condvar.wait(self.mutex_guard.take().unwrap()).unwrap());
+        self.interruption.waiting -= 1;
+
+        if self.interruption.interrupted > 0 {
+            self.interruption.interrupted -= 1;
+            return Err(Error::new(ErrorKind::Interrupted, "Interrupted from another thread"))
+        }
+
+        Ok(())
+    }
+
+    fn interrupt(&mut self) {
+        self.interruption.interrupted = self.interruption.waiting;
+        self.condvar.notify_all();
     }
 }
 
@@ -49,7 +69,7 @@ impl<'a> DerefMut for HeapStorageGuard<'a> {
 }
 
 trait HeapStorageThis {
-    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> bool;
+    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> io::Result<bool>;
     fn store_batch(&self, heap_storage: &NonBlockingHeapStorage, batch: BinaryBatch, guard: HeapStorageGuard) -> io::Result<()>;
     fn notify_after_remove(&self, heap_storage: &NonBlockingHeapStorage, condvar: &Condvar) {}
 }
@@ -78,6 +98,7 @@ impl NonBlockingHeapStorage {
                     batches_queue: VecDeque::new(),
                     occupied_bytes: 0,
                     previous_batch_id: 0,
+                    interruption: Interruption { waiting: 0, interrupted: 0 },
                 }),
                 condvar: Condvar::new(),
             }),
@@ -89,12 +110,12 @@ impl NonBlockingHeapStorage {
 struct Base;
 
 impl HeapStorageThis for Base {
-    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> bool {
-        guard.occupied_bytes + batch.bytes.len() > heap_storage.max_bytes
+    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> io::Result<bool> {
+        Ok(guard.occupied_bytes + batch.bytes.len() > heap_storage.max_bytes)
     }
 
-    fn store_batch(&self, heap_storage: &NonBlockingHeapStorage, batch: BinaryBatch, mut guard: HeapStorageGuard) -> Result<(), Error> {
-        if heap_storage.this.is_capacity_exceeded(heap_storage, &batch, &mut guard) {
+    fn store_batch(&self, heap_storage: &NonBlockingHeapStorage, batch: BinaryBatch, mut guard: HeapStorageGuard) -> io::Result<()> {
+        if heap_storage.this.is_capacity_exceeded(heap_storage, &batch, &mut guard)? {
             return Err(Error::new(ErrorKind::Other, format!("Storage capacity {} exceeded by {}", heap_storage.max_bytes, batch.bytes.len())));
         }
 
@@ -128,7 +149,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
             if let Some(batch) = guard.batches_queue.front() {
                 return Ok(batch.clone());
             }
-            guard.wait();
+            guard.wait()?;
         }
     }
 
@@ -150,6 +171,11 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
     fn is_empty(&self) -> bool {
         self.shared_state.mutex.lock().unwrap().batches_queue.is_empty()
     }
+
+    fn shutdown(self) {
+        let mut guard = HeapStorageGuard::from(&self.shared_state);
+        guard.interrupt();
+    }
 }
 
 
@@ -158,13 +184,12 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
 struct Blocking(Box<dyn HeapStorageThis + Send + Sync>);
 
 impl HeapStorageThis for Blocking {
-    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> bool {
+    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> io::Result<bool> {
         loop {
-            let is_capacity_exceeded = self.0.is_capacity_exceeded(heap_storage, batch, guard);
-            if !is_capacity_exceeded {
-                return false
+            if !self.0.is_capacity_exceeded(heap_storage, batch, guard)? {
+                return Ok(false)
             }
-            guard.wait();
+            guard.wait()?;
         }
     }
 
@@ -211,6 +236,10 @@ impl<'a> BatchStorage<Arc<BinaryBatch>> for HeapStorage {
 
     fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    fn shutdown(self) {
+        self.0.shutdown();
     }
 }
 
