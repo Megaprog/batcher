@@ -1,6 +1,6 @@
 use crate::batch_storage::{BatchStorage, BinaryBatch, BatchFactory};
 use std::time::{Duration, SystemTime};
-use std::{io, thread};
+use std::{io, thread, error};
 use crate::batch_sender::BatchSender;
 use std::ops::Deref;
 use std::thread::JoinHandle;
@@ -38,9 +38,9 @@ impl<T, R, Builder> RecordsBuilderFactory<T, R, Builder> for fn() -> Builder
 
 pub trait Batcher<T> {
     fn start(&mut self) -> bool;
-    fn stop(self);
-    fn hard_stop(self);
-    fn soft_stop(self);
+    fn stop(self) -> io::Result<()>;
+    fn hard_stop(self) -> io::Result<()>;
+    fn soft_stop(self)-> io::Result<()>;
     fn is_stopped(&self) -> bool;
 
     fn put(&mut self, record: T) -> io::Result<()>;
@@ -221,6 +221,29 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     fn should_interrupt(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> bool {
         mutex_guard.hard_stop || (self.batch_storage.is_persistent() && !mutex_guard.soft_stop) || self.batch_storage.is_empty()
     }
+
+    fn stop_inner(mut self, hard: bool, soft: bool) -> io::Result<()> {
+        {
+            let mut guard = self.shared_state.lock().unwrap();
+            if guard.stopped {
+                return Ok(());
+            }
+            guard.stopped = true;
+            guard.hard_stop = hard;
+            guard.soft_stop = soft;
+        }
+        self.flush()?;
+        self.batch_storage.shutdown();
+        self.shared_state.lock().unwrap().upload_thread.take()
+            .map(|upload_thread| upload_thread.join())
+            .map(|r| r.map_err(|e|
+                if let Ok(error) = e.downcast::<Error>() {
+                    Error::new(ErrorKind::Other, error)
+                } else {
+                    Error::new(ErrorKind::Other, "The upload thread panicked with unknown reason".to_string())
+                }))
+            .unwrap_or(Ok(()))
+    }
 }
 
 impl<T: Clone + Send + 'static, Records: Clone + Send + 'static, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
@@ -250,20 +273,20 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         true
     }
 
-    fn stop(self) {
-        unimplemented!()
+    fn stop(mut self) -> io::Result<()> {
+        self.stop_inner(false, false)
     }
 
-    fn hard_stop(self) {
-        unimplemented!()
+    fn hard_stop(self) -> io::Result<()> {
+        self.stop_inner(true, false)
     }
 
-    fn soft_stop(self) {
-        unimplemented!()
+    fn soft_stop(self) -> io::Result<()> {
+        self.stop_inner(false, true)
     }
 
     fn is_stopped(&self) -> bool {
-        unimplemented!()
+        self.shared_state.lock().unwrap().stopped
     }
 
     fn put(&mut self, record: T) -> Result<(), Error> {
