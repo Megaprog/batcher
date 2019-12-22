@@ -238,7 +238,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
             .map(|upload_thread| upload_thread.join())
             .map(|r| r.map_err(|e|
                 if let Ok(error) = e.downcast::<Error>() {
-                    Error::new(ErrorKind::Other, error)
+                    Error::new(error.kind(), error)
                 } else {
                     Error::new(ErrorKind::Other, "The upload thread panicked with unknown reason".to_string())
                 }))
