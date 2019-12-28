@@ -8,6 +8,7 @@ mod batch_storage;
 mod heap_storage;
 mod file_storage;
 mod batch_sender;
+mod chained_error;
 mod batcher;
 
 pub fn handle_connection(mut stream: &TcpStream) -> io::Result<()> {

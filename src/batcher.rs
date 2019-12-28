@@ -8,14 +8,11 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::io::{Error, ErrorKind};
 use log::*;
+use crate::chained_error::Chained;
 
 
 const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
 const DEFAULT_MAX_BATCH_BYTES: usize = 1024 * 1024;
-
-pub fn duration_since(now: SystemTime, since: SystemTime) -> Duration {
-    now.duration_since(since).unwrap_or(Duration::from_secs(0))
-}
 
 pub trait RecordsBuilder<T, R>: Clone + Send + 'static {
     fn add(&mut self, record: T);
@@ -56,8 +53,8 @@ pub struct BatcherSharedState<T, Records, Builder: RecordsBuilder<T, Records>> {
     soft_stop: bool,
     last_flush_time: SystemTime,
     records_builder: Builder,
-    upload_thread: Option<JoinHandle<()>>,
-    last_upload_result: io::Result<()>,
+    upload_thread: Option<JoinHandle<io::Result<()>>>,
+    last_upload_result: Arc<io::Result<()>>,
 
     phantom_t: PhantomData<T>,
     phantom_r: PhantomData<Records>,
@@ -126,7 +123,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                 last_flush_time: SystemTime::UNIX_EPOCH,
                 records_builder,
                 upload_thread: None,
-                last_upload_result: Ok(()),
+                last_upload_result: Arc::new(Ok(())),
 
                 phantom_t: PhantomData,
                 phantom_r: PhantomData,
@@ -138,7 +135,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         }
     }
 
-    fn upload(mut self) {
+    fn upload(mut self) -> io::Result<()> {
         trace!("Upload starting...");
 
         let mut uploaded_batch_counter = 0;
@@ -171,9 +168,9 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                 let send_result = self.batch_sender.send_batch(&batch.bytes);
                 if let Err(e) = send_result {
                     error!("Unexpected exception while sending the {}: {}", *batch, e);
-                    self.shared_state.lock().unwrap() .last_upload_result = Err(e);
-                    self.stop();
-                    return;
+                    self.shared_state.lock().unwrap() .last_upload_result = Arc::new(Err(e));
+                    self.stop()?;
+                    return Ok(());
                 }
 
                 debug!("{} finished. Took {:?}", *batch, self.since(batch_upload_start));
@@ -206,6 +203,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         }
 
         info!("{} from {} batches uploaded. Send {} bytes", uploaded_batch_counter, all_batch_counter, send_batches_bytes);
+        Ok(())
     }
 
     fn since(&self, since: SystemTime) -> Duration {
@@ -242,7 +240,28 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                 } else {
                     Error::new(ErrorKind::Other, "The upload thread panicked with unknown reason".to_string())
                 }))
-            .unwrap_or(Ok(()))
+            .unwrap_or(())
+    }
+
+    fn check_state(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
+        if mutex_guard.stopped {
+            return Err(Error::new(ErrorKind::Interrupted,
+                                  Chained::monad(
+                                      "The batcher has been stopped".to_string(),
+                                      Box::new(mutex_guard.last_upload_result.clone()),
+                                      Box::new(|any|
+                                          any.downcast_ref::<Arc<io::Result<()>>>()
+                                              .map(|arc| (**arc).as_ref().err())
+                                              .flatten()
+                                              .map(|e| e as &(dyn error::Error))))));
+        }
+        Ok(())
+    }
+
+    fn need_flush(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> bool {
+        (self.max_batch_bytes > 0 && mutex_guard.records_builder.size() >= self.max_batch_bytes)
+            || (self.max_batch_records > 0 && mutex_guard.records_builder.len() >= self.max_batch_records)
+            || self.since(mutex_guard.last_flush_time) > self.flush_period
     }
 }
 
@@ -267,7 +286,7 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
 
         let mut cloned_batcher = self.clone();
         guard.upload_thread = Some(thread::Builder::new().name("batcher-upload".to_string()).spawn(move || {
-            cloned_batcher.upload();
+            cloned_batcher.upload()
         }).unwrap());
 
         true
