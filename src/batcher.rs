@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::io::{Error, ErrorKind};
 use log::*;
-use crate::chained_error::Chained;
+use crate::chained_error::ChainedError;
 
 
 const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
@@ -236,7 +236,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
             .map(|r| r.map_err(|e|
                 if let Ok(error) = e.downcast::<Error>() {
                     Error::new(ErrorKind::Other,
-                               Chained::new("The upload thread panicked with the reason", error))
+                               ChainedError::new("The upload thread panicked with the reason", error))
                 } else {
                     Error::new(ErrorKind::Other, "The upload thread panicked with unknown reason".to_string())
                 }))
@@ -246,7 +246,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     fn check_state(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
         if mutex_guard.stopped {
             return Err(Error::new(ErrorKind::Interrupted,
-                                  Chained::monad(
+                                  ChainedError::monad(
                                       "The batcher has been stopped".to_string(),
                                       Box::new(mutex_guard.last_upload_result.clone()),
                                       Box::new(|any|

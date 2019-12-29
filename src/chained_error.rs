@@ -7,7 +7,7 @@ use std::any::Any;
 
 
 #[derive(Debug)]
-pub struct Chained {
+pub struct ChainedError {
     description: String,
     source: Source,
 }
@@ -28,27 +28,27 @@ impl fmt::Debug for Source {
     }
 }
 
-impl Chained {
-    pub fn without_source(description: impl AsRef<str>) -> Chained {
-        Chained {
+impl ChainedError {
+    pub fn without_source(description: impl AsRef<str>) -> ChainedError {
+        ChainedError {
             description: description.as_ref().to_string(),
             source: Empty
         }
     }
 
-    pub fn new<E>(description: impl AsRef<str>, source: E) -> Chained
+    pub fn new<E>(description: impl AsRef<str>, source: E) -> ChainedError
         where E: Into<Box<dyn Error + Send + Sync>>
     {
-        Chained {
+        ChainedError {
             description: description.as_ref().to_string(),
             source: Own(source.into())
         }
     }
 
-    pub fn optional<E>(description: impl AsRef<str>, source: Option<E>) -> Chained
+    pub fn optional<E>(description: impl AsRef<str>, source: Option<E>) -> ChainedError
         where E: Into<Box<dyn Error + Send + Sync>>
     {
-        Chained {
+        ChainedError {
             description: description.as_ref().to_string(),
             source: match source {
                 Some(e) => Own(e.into()),
@@ -57,15 +57,15 @@ impl Chained {
         }
     }
 
-    pub fn result<T, E>(description: impl AsRef<str>, source: Result<T, E>) -> Chained
+    pub fn result<T, E>(description: impl AsRef<str>, source: Result<T, E>) -> ChainedError
         where E: Into<Box<dyn Error + Send + Sync>>
     {
-        Chained::optional(description, source.err())
+        ChainedError::optional(description, source.err())
     }
 
     pub fn monad(description: impl AsRef<str>, value: Box<dyn Any + Send + Sync>,
-                    func: Box<dyn Fn(&dyn Any) -> Option<&(dyn Error + 'static)> + Send + Sync>) -> Chained {
-        Chained {
+                    func: Box<dyn Fn(&dyn Any) -> Option<&(dyn Error + 'static)> + Send + Sync>) -> ChainedError {
+        ChainedError {
             description: description.as_ref().to_string(),
             source: Ref(value, func),
         }
@@ -73,7 +73,7 @@ impl Chained {
 }
 
 
-impl fmt::Display for Chained {
+impl fmt::Display for ChainedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         
         fn write_some(f: &mut fmt::Formatter<'_>, description: &str, e: &dyn Error) -> fmt::Result {
@@ -95,7 +95,7 @@ impl fmt::Display for Chained {
     }
 }
 
-impl Error for Chained {
+impl Error for ChainedError {
     fn description(&self) -> &str {
         &self.description
     }
@@ -112,58 +112,58 @@ impl Error for Chained {
 
 #[cfg(test)]
 mod test {
-    use crate::chained_error::Chained;
+    use crate::chained_error::ChainedError;
     use std::error::Error;
     use std::sync::Arc;
     use std::error;
 
     #[test]
     fn without_source() {
-        let c = Chained::without_source("error");
+        let c = ChainedError::without_source("error");
         assert_eq!("error", &c.to_string());
         assert!(c.source().is_none());
     }
 
     #[test]
     fn new() {
-        let c = Chained::new("error", "parent");
+        let c = ChainedError::new("error", "parent");
         assert_eq!("error\nCaused by: parent", &c.to_string());
         assert_eq!("parent", c.source().unwrap().to_string());
     }
 
     #[test]
     fn optional_some() {
-        let c = Chained::optional("error", Some("parent"));
+        let c = ChainedError::optional("error", Some("parent"));
         assert_eq!("error\nCaused by: parent", &c.to_string());
         assert_eq!("parent", c.source().unwrap().to_string());
     }
 
     #[test]
     fn optional_none() {
-        let c = Chained::optional("error", Option::<String>::None);
+        let c = ChainedError::optional("error", Option::<String>::None);
         assert_eq!("error", &c.to_string());
         assert!(c.source().is_none());
     }
 
     #[test]
     fn result_err() {
-        let c = Chained::result("error", Result::<(), &str>::Err("parent"));
+        let c = ChainedError::result("error", Result::<(), &str>::Err("parent"));
         assert_eq!("error\nCaused by: parent", &c.to_string());
         assert_eq!("parent", c.source().unwrap().to_string());
     }
 
     #[test]
     fn result_ok() {
-        let c = Chained::result("error", Result::<(), String>::Ok(()));
+        let c = ChainedError::result("error", Result::<(), String>::Ok(()));
         assert_eq!("error", &c.to_string());
         assert!(c.source().is_none());
     }
 
     #[test]
     fn monad() {
-        let c = Chained::monad("error",
-                               Box::new(Arc::<dyn Error + Send + Sync>::from(Box::<dyn Error + Send + Sync>::from("parent"))),
-                               Box::new(|any|
+        let c = ChainedError::monad("error",
+                                    Box::new(Arc::<dyn Error + Send + Sync>::from(Box::<dyn Error + Send + Sync>::from("parent"))),
+                                    Box::new(|any|
                                    any.downcast_ref::<Arc<dyn Error + Send + Sync>>()
                                        .map(|arc| &**arc)
                                        .map(|e| e as &(dyn Error))));
