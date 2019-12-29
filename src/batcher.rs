@@ -53,7 +53,7 @@ pub struct BatcherSharedState<T, Records, Builder: RecordsBuilder<T, Records>> {
     soft_stop: bool,
     last_flush_time: SystemTime,
     records_builder: Builder,
-    upload_thread: Option<JoinHandle<io::Result<()>>>,
+    upload_thread: Option<JoinHandle<()>>,
     last_upload_result: Arc<io::Result<()>>,
 
     phantom_t: PhantomData<T>,
@@ -135,7 +135,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         }
     }
 
-    fn upload(mut self) -> io::Result<()> {
+    fn upload(mut self) {
         trace!("Upload starting...");
 
         let mut uploaded_batch_counter = 0;
@@ -169,8 +169,8 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                 if let Err(e) = send_result {
                     error!("Unexpected exception while sending the {}: {}", *batch, e);
                     self.shared_state.lock().unwrap() .last_upload_result = Arc::new(Err(e));
-                    self.stop()?;
-                    return Ok(());
+                    self.stop().unwrap();
+                    return;
                 }
 
                 debug!("{} finished. Took {:?}", *batch, self.since(batch_upload_start));
@@ -203,7 +203,6 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         }
 
         info!("{} from {} batches uploaded. Send {} bytes", uploaded_batch_counter, all_batch_counter, send_batches_bytes);
-        Ok(())
     }
 
     fn since(&self, since: SystemTime) -> Duration {
@@ -240,7 +239,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                 } else {
                     Error::new(ErrorKind::Other, "The upload thread panicked with unknown reason".to_string())
                 }))
-            .unwrap_or(())
+            .unwrap_or(Ok(()))
     }
 
     fn check_state(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
@@ -286,7 +285,7 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
 
         let mut cloned_batcher = self.clone();
         guard.upload_thread = Some(thread::Builder::new().name("batcher-upload".to_string()).spawn(move || {
-            cloned_batcher.upload()
+            cloned_batcher.upload();
         }).unwrap());
 
         true
