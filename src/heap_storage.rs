@@ -367,7 +367,7 @@ mod test {
     }
 
     pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(mut heap_storage: T) {
-        let mut cloned_storage = heap_storage.clone();
+        let cloned_storage = heap_storage.clone();
         let consumer_thread = thread::spawn(move || {
             let get_result = cloned_storage.get();
             cloned_storage.remove();
@@ -387,7 +387,7 @@ mod test {
         assert!(heap_storage.is_empty());
     }
 
-    pub(crate) fn start_consumer_thread<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(mut cloned_storage: T) -> JoinHandle<()> {
+    pub(crate) fn start_consumer_thread<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(cloned_storage: T) -> JoinHandle<()> {
         thread::spawn(move || {
             {
                 let batch = cloned_storage.get().unwrap();

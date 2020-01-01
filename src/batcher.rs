@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::io::{Error, ErrorKind};
 use log::*;
 use crate::chained_error::ChainedError;
-use std::env::set_current_dir;
 
 
 const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
@@ -35,7 +34,7 @@ impl<T, R, Builder> RecordsBuilderFactory<T, R, Builder> for fn() -> Builder
 }
 
 pub trait Batcher<T> {
-    fn start(&mut self) -> bool;
+    fn start(&self) -> bool;
     fn stop(self) -> io::Result<()>;
     fn hard_stop(self) -> io::Result<()>;
     fn soft_stop(self)-> io::Result<()>;
@@ -220,7 +219,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         mutex_guard.hard_stop || (self.batch_storage.is_persistent() && !mutex_guard.soft_stop) || self.batch_storage.is_empty()
     }
 
-    fn stop_inner(mut self, hard: bool, soft: bool) -> io::Result<()> {
+    fn stop_inner(self, hard: bool, soft: bool) -> io::Result<()> {
         {
             let mut guard = self.shared_state.lock().unwrap();
             if guard.stopped {
@@ -308,7 +307,7 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         Storage: BatchStorage<Batch>,
         Sender: BatchSender
 {
-    fn start(&mut self) -> bool {
+    fn start(&self) -> bool {
         let mut mutex_guard = self.shared_state.lock().unwrap();
         if mutex_guard.upload_thread.is_some() {
             return false;
@@ -317,7 +316,7 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         mutex_guard.stopped = false;
         mutex_guard.last_flush_time = (self.clock)();
 
-        let mut cloned_batcher = self.clone();
+        let cloned_batcher = self.clone();
         mutex_guard.upload_thread = Some(thread::Builder::new().name("batcher-upload".to_string()).spawn(move || {
             cloned_batcher.upload();
         }).unwrap());
@@ -325,7 +324,7 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         true
     }
 
-    fn stop(mut self) -> io::Result<()> {
+    fn stop(self) -> io::Result<()> {
         self.stop_inner(false, false)
     }
 
