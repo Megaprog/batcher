@@ -164,9 +164,9 @@ mod test {
         let c = ChainedError::monad("error",
                                     Box::new(Arc::<dyn Error + Send + Sync>::from(Box::<dyn Error + Send + Sync>::from("parent"))),
                                     Box::new(|any|
-                                   any.downcast_ref::<Arc<dyn Error + Send + Sync>>()
-                                       .map(|arc| &**arc)
-                                       .map(|e| e as &(dyn Error))));
+                                        any.downcast_ref::<Arc<dyn Error + Send + Sync>>()
+                                            .map(|arc| &**arc)
+                                            .map(|e| e as &(dyn Error))));
         assert_eq!("error\nCaused by: parent", &c.to_string());
         assert_eq!("parent", c.source().unwrap().to_string());
     }

@@ -136,7 +136,7 @@ impl HeapStorageThis for Base {
 }
 
 impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
-    fn store<T>(&mut self, actions: T, batch_factory: impl BatchFactory<T>) -> io::Result<()> {
+    fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
         let guard = HeapStorageGuard::from(&self.shared_state);
 
         let epoch = (self.clock)();
@@ -159,7 +159,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
         }
     }
 
-    fn remove(&mut self) -> io::Result<()> {
+    fn remove(&self) -> io::Result<()> {
         let mut mutex_guard = self.shared_state.mutex.lock().unwrap();
         let batch_opt = mutex_guard.batches_queue.pop_front();
         if let Some(batch) = batch_opt {
@@ -225,7 +225,7 @@ impl HeapStorage {
 }
 
 impl<'a> BatchStorage<Arc<BinaryBatch>> for HeapStorage {
-    fn store<T>(&mut self, actions: T, batch_factory: impl BatchFactory<T>) -> io::Result<()> {
+    fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
         self.0.store(actions, batch_factory)
     }
 
@@ -233,7 +233,7 @@ impl<'a> BatchStorage<Arc<BinaryBatch>> for HeapStorage {
         self.0.get()
     }
 
-    fn remove(&mut self) -> io::Result<()> {
+    fn remove(&self) -> io::Result<()> {
         self.0.remove()
     }
 
@@ -262,7 +262,7 @@ mod test_non_blocking_heap_storage {
     #[test]
     fn drop_if_out_of_capacity() {
         let mut non_blocking_heap_storage = NonBlockingHeapStorage::with_max_batch_bytes(0);
-        let result = non_blocking_heap_storage.store("Test".to_string(), BATCH_FACTORY);
+        let result = non_blocking_heap_storage.store("Test".to_string(), &BATCH_FACTORY);
 
         assert_eq!("Storage capacity 0 exceeded by 2".to_string(), result.unwrap_err().to_string());
         assert!(non_blocking_heap_storage.is_empty());
@@ -301,11 +301,11 @@ mod test_heap_storage {
     #[test]
     fn blocks_forever() {
         let mut heap_storage = HeapStorage::with_max_batch_bytes(1);
-        assert!(heap_storage.store("Test1".to_string(), BATCH_FACTORY).is_ok());
+        assert!(heap_storage.store("Test1".to_string(), &BATCH_FACTORY).is_ok());
 
         let mut cloned_storage = heap_storage.clone();
         let join_handle = thread::spawn(move || {
-            assert!(cloned_storage.store("Test2".to_string(), BATCH_FACTORY).is_ok());
+            assert!(cloned_storage.store("Test2".to_string(), &BATCH_FACTORY).is_ok());
         });
 
         thread::sleep(Duration::from_millis(10));
@@ -346,7 +346,7 @@ mod test {
     pub(crate) static BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
 
     pub(crate) fn producer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(mut heap_storage: T) {
-        assert!(heap_storage.store("Test".to_string(), BATCH_FACTORY).is_ok());
+        assert!(heap_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
         assert!(!heap_storage.is_empty());
 
         let consumer_thread = start_consumer_thread(heap_storage.clone());
@@ -359,7 +359,7 @@ mod test {
         let consumer_thread = start_consumer_thread(heap_storage.clone());
         thread::sleep(Duration::from_millis(1));
 
-        assert!(heap_storage.store("Test".to_string(), BATCH_FACTORY).is_ok());
+        assert!(heap_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
 
         consumer_thread.join().unwrap();
 
@@ -381,7 +381,7 @@ mod test {
         assert!(thread_result.is_err());
         assert_eq!(ErrorKind::Interrupted, thread_result.err().unwrap().kind());
 
-        let store_result = heap_storage.store("Test".to_string(), BATCH_FACTORY);
+        let store_result = heap_storage.store("Test".to_string(), &BATCH_FACTORY);
         assert!(store_result.is_err());
         assert_eq!(ErrorKind::Interrupted, store_result.err().unwrap().kind());
         assert!(heap_storage.is_empty());

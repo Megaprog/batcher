@@ -1,6 +1,6 @@
 use crate::batch_storage::{BatchStorage, BinaryBatch, BatchFactory};
 use std::time::{Duration, SystemTime};
-use std::{io, thread, error};
+use std::{io, thread, error, mem};
 use crate::batch_sender::BatchSender;
 use std::ops::Deref;
 use std::thread::JoinHandle;
@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::io::{Error, ErrorKind};
 use log::*;
 use crate::chained_error::ChainedError;
+use std::env::set_current_dir;
 
 
 const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
@@ -40,10 +41,10 @@ pub trait Batcher<T> {
     fn soft_stop(self)-> io::Result<()>;
     fn is_stopped(&self) -> bool;
 
-    fn put(&mut self, record: T) -> io::Result<()>;
-    fn put_all(&mut self, records: impl Iterator<Item=T>) -> io::Result<()>;
-    fn flush(&mut self) -> io::Result<()>;
-    fn flush_if_needed(&mut self) -> io::Result<bool>;
+    fn put(&self, record: T) -> io::Result<()>;
+    fn put_all(&self, records: impl Iterator<Item=T>) -> io::Result<()>;
+    fn flush(&self) -> io::Result<()>;
+    fn flush_if_needed(&self) -> io::Result<bool>;
 }
 
 
@@ -243,7 +244,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
             .unwrap_or(Ok(()))
     }
 
-    fn check_state(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
+    fn check_state(&self, mutex_guard: &MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
         if mutex_guard.stopped {
             return Err(Error::new(ErrorKind::Interrupted,
                                   ChainedError::monad(
@@ -258,10 +259,42 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         Ok(())
     }
 
-    fn need_flush(&self, mutex_guard: MutexGuard<BatcherSharedState<T, Records, Builder>>) -> bool {
+    fn need_flush(&self, mutex_guard: &MutexGuard<BatcherSharedState<T, Records, Builder>>) -> bool {
         (self.max_batch_bytes > 0 && mutex_guard.records_builder.size() >= self.max_batch_bytes)
             || (self.max_batch_records > 0 && mutex_guard.records_builder.len() >= self.max_batch_records)
             || self.since(mutex_guard.last_flush_time) > self.flush_period
+    }
+
+    fn flush_inner(&self, mutex_guard: &mut MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
+        let records_builder = mem::replace(&mut mutex_guard.records_builder, self.builder_factory.create_builder());
+        let len = records_builder.len();
+        let size = records_builder.size();
+        trace!("Flushing {} bytes in {} actions", size, len);
+
+        if len == 0 {
+            debug!("Nothing to flush");
+            return Ok(());
+        }
+
+        let result = self.batch_storage.store(records_builder.build(), &self.batch_factory);
+        if result.is_ok() {
+            debug!("Flushing completed for {} bytes in {} actions", size, len);
+            mutex_guard.last_flush_time = (self.clock)();
+        } else {
+            warn!("Flushing failed for {} bytes in {} actions with error: {}", size, len, result.as_ref().unwrap_err());
+        }
+
+        result
+    }
+
+    fn put_inner(&self, record: T, mutex_guard: &mut MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
+        if self.need_flush(mutex_guard) {
+            self.flush_inner(mutex_guard)?
+        }
+
+        mutex_guard.records_builder.add(record);
+
+        Ok(())
     }
 }
 
@@ -276,16 +309,16 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         Sender: BatchSender
 {
     fn start(&mut self) -> bool {
-        let mut guard = self.shared_state.lock().unwrap();
-        if guard.upload_thread.is_some() {
+        let mut mutex_guard = self.shared_state.lock().unwrap();
+        if mutex_guard.upload_thread.is_some() {
             return false;
         }
 
-        guard.stopped = false;
-        guard.last_flush_time = (self.clock)();
+        mutex_guard.stopped = false;
+        mutex_guard.last_flush_time = (self.clock)();
 
         let mut cloned_batcher = self.clone();
-        guard.upload_thread = Some(thread::Builder::new().name("batcher-upload".to_string()).spawn(move || {
+        mutex_guard.upload_thread = Some(thread::Builder::new().name("batcher-upload".to_string()).spawn(move || {
             cloned_batcher.upload();
         }).unwrap());
 
@@ -308,19 +341,36 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         self.shared_state.lock().unwrap().stopped
     }
 
-    fn put(&mut self, record: T) -> Result<(), Error> {
-        unimplemented!()
+    fn put(&self, record: T) -> Result<(), Error> {
+        let mut mutex_guard = self.shared_state.lock().unwrap();
+        self.check_state(&mutex_guard)?;
+        self.put_inner(record, &mut mutex_guard)
     }
 
-    fn put_all(&mut self, records: impl Iterator<Item=T>) -> Result<(), Error> {
-        unimplemented!()
+    fn put_all(&self, records: impl Iterator<Item=T>) -> Result<(), Error> {
+        let mut mutex_guard = self.shared_state.lock().unwrap();
+        self.check_state(&mutex_guard)?;
+
+        for record in records {
+            self.put_inner(record, &mut mutex_guard)?
+        }
+        
+        Ok(())
     }
 
-    fn flush(&mut self) -> Result<(), Error> {
-        unimplemented!()
+    fn flush(&self) -> Result<(), Error> {
+        self.flush_inner(&mut self.shared_state.lock().unwrap())
     }
 
-    fn flush_if_needed(&mut self) -> Result<bool, Error> {
-        unimplemented!()
+    fn flush_if_needed(&self) -> Result<bool, Error> {
+        let mut mutex_guard = self.shared_state.lock().unwrap();
+        self.check_state(&mutex_guard)?;
+
+        if self.need_flush(&mutex_guard) {
+            self.flush_inner(&mut mutex_guard)?;
+            return Ok(true)
+        }
+
+        return Ok(false)
     }
 }

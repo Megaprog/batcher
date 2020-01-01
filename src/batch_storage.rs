@@ -28,9 +28,9 @@ impl<R: 'static> BatchFactory<R> for fn(R, i64) -> io::Result<BinaryBatch> {
 }
 
 pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone + Send + 'static {
-    fn store<R>(&mut self, records: R, batch_factory: impl BatchFactory<R>) -> io::Result<()>;
+    fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()>;
     fn get(&self) -> io::Result<B>;
-    fn remove(&mut self) -> io::Result<()>;
+    fn remove(&self) -> io::Result<()>;
     fn is_persistent(&self) -> bool;
     fn is_empty(&self) -> bool;
     fn shutdown(self);
