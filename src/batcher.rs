@@ -1,4 +1,6 @@
 use crate::batch_storage::{BatchStorage, BinaryBatch, BatchFactory};
+use crate::chained_error::ChainedError;
+use crate::batch_records::{RecordsBuilder, RecordsBuilderFactory};
 use std::time::{Duration, SystemTime};
 use std::{io, thread, error, mem};
 use crate::batch_sender::BatchSender;
@@ -8,30 +10,10 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::io::{Error, ErrorKind};
 use log::*;
-use crate::chained_error::ChainedError;
 
 
 const DEFAULT_MAX_BATCH_RECORDS: u32 = 10000;
 const DEFAULT_MAX_BATCH_BYTES: usize = 1024 * 1024;
-
-pub trait RecordsBuilder<T, R>: Clone + Send + 'static {
-    fn add(&mut self, record: T);
-    fn len(&self) -> u32;
-    fn size(&self) -> usize;
-    fn build(self) -> R;
-}
-
-pub trait RecordsBuilderFactory<T, R, Builder: RecordsBuilder<T, R>>: Clone + Send + 'static {
-    fn create_builder(&self) -> Builder;
-}
-
-impl<T, R, Builder> RecordsBuilderFactory<T, R, Builder> for fn() -> Builder
-    where Builder: RecordsBuilder<T, R>
-{
-    fn create_builder(&self) -> Builder {
-        self()
-    }
-}
 
 pub trait Batcher<T> {
     fn start(&self) -> bool;
@@ -209,7 +191,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         (self.clock)().duration_since(since).unwrap_or(Duration::from_secs(0))
     }
 
-    fn try_remove(&mut self, batch: &Batch) {
+    fn try_remove(&self, batch: &Batch) {
         if let Err(e) = self.batch_storage.remove() {
             error!("Error while removing uploaded {}: {}", **batch, e);
         }
@@ -267,7 +249,8 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 
     fn flush_inner(&self, mutex_guard: &mut MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
-        let records_builder = mem::replace(&mut mutex_guard.records_builder, self.builder_factory.create_builder());
+        let records_builder = mem::replace(&mut mutex_guard.records_builder,
+                                           self.builder_factory.create_builder());
         let len = records_builder.len();
         let size = records_builder.size();
         trace!("Flushing {} bytes in {} actions", size, len);
@@ -374,4 +357,9 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
 
         return Ok(false)
     }
+}
+
+#[cfg(test)]
+mod test {
+    
 }

@@ -115,7 +115,6 @@ mod test {
     use crate::chained_error::ChainedError;
     use std::error::Error;
     use std::sync::Arc;
-    use std::error;
 
     #[test]
     fn without_source() {

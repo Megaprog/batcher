@@ -37,21 +37,21 @@ pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone + Send + 'static {
 }
 
 #[derive(Clone, Debug)]
-pub struct GzippedDisplayBatchFactory<T> {
+pub struct GzippedJsonDisplayBatchFactory<T> {
     server_id: String,
     phantom: PhantomData<T>
 }
 
-impl<T> GzippedDisplayBatchFactory<T> {
+impl<T> GzippedJsonDisplayBatchFactory<T> {
     pub fn new(server_id: String) -> Self {
-        GzippedDisplayBatchFactory {
+        GzippedJsonDisplayBatchFactory {
             server_id,
             phantom: PhantomData
         }
     }
 }
 
-impl<R: Display + Clone + Send + 'static> BatchFactory<R> for GzippedDisplayBatchFactory<R> {
+impl<R: Display + Clone + Send + 'static> BatchFactory<R> for GzippedJsonDisplayBatchFactory<R> {
     fn create_batch(&self, records: R, batch_id: i64) -> io::Result<BinaryBatch> {
         Ok(BinaryBatch {
             batch_id,
@@ -73,11 +73,11 @@ pub fn time_from_epoch() -> Duration {
 #[cfg(test)]
 mod test {
     use miniz_oxide::inflate::decompress_to_vec;
-    use crate::batch_storage::{GzippedDisplayBatchFactory, BatchFactory};
+    use crate::batch_storage::{GzippedJsonDisplayBatchFactory, BatchFactory};
 
     #[test]
     fn test_gzipped_batch_factory() {
-        let batch_factory = GzippedDisplayBatchFactory::new("server_1".to_string());
+        let batch_factory = GzippedJsonDisplayBatchFactory::new("server_1".to_string());
         let batch = batch_factory.create_batch(r#"["action1", "action2"]"#, 1).unwrap();
         let decompressed = String::from_utf8(decompress_to_vec(&batch.bytes).unwrap()).unwrap();
         assert_eq!(r#"{"serverId":server_1,"batchId":1,"batch":["action1", "action2"]}"#, decompressed)
