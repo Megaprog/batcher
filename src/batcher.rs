@@ -220,17 +220,19 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 
     fn stop_inner(self, hard: bool, soft: bool) -> io::Result<()> {
-        {
-            let mut guard = self.shared_state.lock().unwrap();
-            if guard.stopped {
-                return Ok(());
-            }
-            guard.stopped = true;
-            guard.hard_stop = hard;
-            guard.soft_stop = soft;
+        let mut mutex_guard = self.shared_state.lock().unwrap();
+        if mutex_guard.stopped {
+            return Ok(());
         }
-        self.flush()?;
+
+        mutex_guard.stopped = true;
+        mutex_guard.hard_stop = hard;
+        mutex_guard.soft_stop = soft;
+
+        self.flush_inner(&mut mutex_guard)?;
+
         self.batch_storage.shutdown();
+        
         self.shared_state.lock().unwrap().upload_thread.take()
             .map(|upload_thread| upload_thread.join())
             .map(|r| r.map_err(|e|
