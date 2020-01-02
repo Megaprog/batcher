@@ -233,7 +233,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
 
         self.batch_storage.shutdown();
         
-        self.shared_state.lock().unwrap().upload_thread.take()
+        mutex_guard.upload_thread.take()
             .map(|upload_thread| upload_thread.join())
             .map(|r| r.map_err(|e|
                 if let Ok(error) = e.downcast::<Error>() {
