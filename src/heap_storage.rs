@@ -261,7 +261,7 @@ mod test_non_blocking_heap_storage {
 
     #[test]
     fn drop_if_out_of_capacity() {
-        let mut non_blocking_heap_storage = NonBlockingHeapStorage::with_max_batch_bytes(0);
+        let non_blocking_heap_storage = NonBlockingHeapStorage::with_max_batch_bytes(0);
         let result = non_blocking_heap_storage.store("Test".to_string(), &BATCH_FACTORY);
 
         assert_eq!("Storage capacity 0 exceeded by 2".to_string(), result.unwrap_err().to_string());
@@ -284,7 +284,7 @@ mod test_non_blocking_heap_storage {
 
     #[test]
     fn shutdown() {
-        let mut non_blocking_heap_storage = NonBlockingHeapStorage::new();
+        let non_blocking_heap_storage = NonBlockingHeapStorage::new();
         crate::heap_storage::test::shutdown(non_blocking_heap_storage);
     }
 }
@@ -300,10 +300,10 @@ mod test_heap_storage {
 
     #[test]
     fn blocks_forever() {
-        let mut heap_storage = HeapStorage::with_max_batch_bytes(1);
+        let heap_storage = HeapStorage::with_max_batch_bytes(1);
         assert!(heap_storage.store("Test1".to_string(), &BATCH_FACTORY).is_ok());
 
-        let mut cloned_storage = heap_storage.clone();
+        let cloned_storage = heap_storage.clone();
         let join_handle = thread::spawn(move || {
             assert!(cloned_storage.store("Test2".to_string(), &BATCH_FACTORY).is_ok());
         });
@@ -345,7 +345,7 @@ mod test {
 
     pub(crate) static BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
 
-    pub(crate) fn producer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(mut heap_storage: T) {
+    pub(crate) fn producer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(heap_storage: T) {
         assert!(heap_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
         assert!(!heap_storage.is_empty());
 
@@ -355,7 +355,7 @@ mod test {
         assert!(heap_storage.is_empty());
     }
 
-    pub(crate) fn consumer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(mut heap_storage: T) {
+    pub(crate) fn consumer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(heap_storage: T) {
         let consumer_thread = start_consumer_thread(heap_storage.clone());
         thread::sleep(Duration::from_millis(1));
 
@@ -366,7 +366,7 @@ mod test {
         assert!(heap_storage.is_empty());
     }
 
-    pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(mut heap_storage: T) {
+    pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(heap_storage: T) {
         let cloned_storage = heap_storage.clone();
         let consumer_thread = thread::spawn(move || {
             let get_result = cloned_storage.get();

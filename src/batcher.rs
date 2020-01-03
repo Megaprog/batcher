@@ -117,7 +117,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         }
     }
 
-    fn upload(mut self) {
+    fn upload(self) {
         trace!("Upload starting...");
 
         let mut uploaded_batch_counter = 0;
@@ -364,7 +364,6 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
 mod test {
     use crate::batch_sender::BatchSender;
     use std::io::{Error, ErrorKind};
-    use std::borrow::Borrow;
     use crate::batcher::{BatcherImpl, Batcher};
     use crate::batch_storage::GzippedJsonDisplayBatchFactory;
     use crate::heap_storage::HeapStorage;
@@ -372,6 +371,8 @@ mod test {
     use std::thread;
     use std::time::Duration;
     use std::sync::{Once, Arc, Mutex};
+    use env_logger::{Builder, Env};
+    use log::LevelFilter;
 
     #[derive(Clone)]
     struct MockBatchSender {
@@ -397,7 +398,7 @@ mod test {
 
     fn init() {
         INIT.call_once(|| {
-            env_logger::builder().is_test(true).init();
+            env_logger::builder().is_test(true).filter_level(LevelFilter::Trace).init();
         });
     }
 
