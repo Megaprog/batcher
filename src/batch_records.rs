@@ -82,7 +82,7 @@ impl RecordsBuilderFactory<&str, String, JsonArrayRecordsBuilder> for JsonArrayR
     }
 }
 
-const RECORDS_BUILDER_FACTORY: JsonArrayRecordsBuilderFactory = JsonArrayRecordsBuilderFactory;
+pub const RECORDS_BUILDER_FACTORY: JsonArrayRecordsBuilderFactory = JsonArrayRecordsBuilderFactory;
 
 #[cfg(test)]
 mod test {

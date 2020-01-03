@@ -43,9 +43,9 @@ pub struct GzippedJsonDisplayBatchFactory<T> {
 }
 
 impl<T> GzippedJsonDisplayBatchFactory<T> {
-    pub fn new(server_id: String) -> Self {
+    pub fn new(server_id: impl AsRef<str>) -> Self {
         GzippedJsonDisplayBatchFactory {
-            server_id,
+            server_id: server_id.as_ref().to_string(),
             phantom: PhantomData
         }
     }
@@ -77,7 +77,7 @@ mod test {
 
     #[test]
     fn test_gzipped_batch_factory() {
-        let batch_factory = GzippedJsonDisplayBatchFactory::new("server_1".to_string());
+        let batch_factory = GzippedJsonDisplayBatchFactory::new("server_1");
         let batch = batch_factory.create_batch(r#"["action1", "action2"]"#, 1).unwrap();
         let decompressed = String::from_utf8(decompress_to_vec(&batch.bytes).unwrap()).unwrap();
         assert_eq!(r#"{"serverId":server_1,"batchId":1,"batch":["action1", "action2"]}"#, decompressed)

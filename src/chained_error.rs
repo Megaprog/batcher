@@ -23,7 +23,9 @@ impl fmt::Debug for Source {
         match self {
             Empty => write!(f, "Source {{ Empty }}"),
             Own(e) => write!(f, "Source {{ Own({}) }}", e),
-            Ref(_, _) => write!(f, "Source {{ Ref() }}")
+            Ref(v, func) => write!(f, "Source {{ Ref({}) }}", match func(&**v) {
+                Some(e) => format!("Some({})", e),
+                None => "None".to_string()})
         }
     }
 }

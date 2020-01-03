@@ -210,7 +210,7 @@ impl HeapStorageThis for Blocking {
 }
 
 #[derive(Clone)]
-struct HeapStorage(NonBlockingHeapStorage);
+pub struct HeapStorage(NonBlockingHeapStorage);
 
 impl HeapStorage {
     pub fn new() -> HeapStorage {

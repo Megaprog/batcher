@@ -202,20 +202,21 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 
     fn stop_inner(self, hard: bool, soft: bool) -> io::Result<()> {
-        let mut mutex_guard = self.shared_state.lock().unwrap();
-        if mutex_guard.stopped {
-            return Ok(());
+        {
+            let mut mutex_guard = self.shared_state.lock().unwrap();
+            if mutex_guard.stopped {
+                return Ok(());
+            }
+
+            mutex_guard.stopped = true;
+            mutex_guard.hard_stop = hard;
+            mutex_guard.soft_stop = soft;
+
+            self.flush_inner(&mut mutex_guard)?;
+
+            self.batch_storage.shutdown();
+            mutex_guard.upload_thread.take()
         }
-
-        mutex_guard.stopped = true;
-        mutex_guard.hard_stop = hard;
-        mutex_guard.soft_stop = soft;
-
-        self.flush_inner(&mut mutex_guard)?;
-
-        self.batch_storage.shutdown();
-        
-        mutex_guard.upload_thread.take()
             .map(|upload_thread| upload_thread.join())
             .map(|r| r.map_err(|e|
                 if let Ok(error) = e.downcast::<Error>() {
@@ -361,5 +362,81 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
 
 #[cfg(test)]
 mod test {
-    
+    use crate::batch_sender::BatchSender;
+    use std::io::{Error, ErrorKind};
+    use std::borrow::Borrow;
+    use crate::batcher::{BatcherImpl, Batcher};
+    use crate::batch_storage::GzippedJsonDisplayBatchFactory;
+    use crate::heap_storage::HeapStorage;
+    use crate::batch_records::RECORDS_BUILDER_FACTORY;
+    use std::thread;
+    use std::time::Duration;
+    use std::sync::{Once, Arc, Mutex};
+
+    #[derive(Clone)]
+    struct MockBatchSender {
+        batches: Arc<Mutex<Vec<Vec<u8>>>>
+    }
+
+    impl MockBatchSender {
+        fn new() -> MockBatchSender {
+            MockBatchSender {
+                batches: Arc::new(Mutex::new(Vec::new()))
+            }
+        }
+    }
+
+    impl BatchSender for MockBatchSender {
+        fn send_batch(&self, batch: &[u8]) -> Result<Option<Error>, Error> {
+            self.batches.lock().unwrap().push(batch.to_owned());
+            Ok(None)
+        }
+    }
+
+    const INIT: Once = Once::new();
+
+    fn init() {
+        INIT.call_once(|| {
+            env_logger::builder().is_test(true).init();
+        });
+    }
+
+    #[test]
+    fn do_not_start() {
+        let batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            HeapStorage::new(),
+            MockBatchSender::new());
+
+        let result = batcher.put("test1");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Interrupted);
+        assert_eq!(error.get_ref().unwrap().to_string(), "The batcher has been stopped");
+    }
+
+    #[test]
+    fn send_manually() {
+        init();
+
+        let batch_sender = MockBatchSender::new();
+        let batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            HeapStorage::new(),
+            batch_sender.clone());
+
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+
+        thread::sleep(Duration::from_millis(1));
+
+        batcher.hard_stop().unwrap();
+
+        let batches_guard = batch_sender.batches.lock().unwrap();
+        assert_eq!(batches_guard.len(), 1);
+        println!("{:?}", batches_guard[0])
+    }
 }
