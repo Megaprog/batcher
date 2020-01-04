@@ -366,7 +366,7 @@ mod test {
     use std::io::{Error, ErrorKind};
     use crate::batcher::{BatcherImpl, Batcher};
     use crate::batch_storage::{GzippedJsonDisplayBatchFactory, BinaryBatch};
-    use crate::heap_storage::HeapStorage;
+    use crate::memory_storage::MemoryStorage;
     use crate::batch_records::{RECORDS_BUILDER_FACTORY, JsonArrayRecordsBuilder, JsonArrayRecordsBuilderFactory};
     use std::thread;
     use std::time::{Duration, SystemTime};
@@ -425,10 +425,10 @@ mod test {
         });
     }
 
-    fn heap_storage() -> HeapStorage {
-        let mut heap_storage = HeapStorage::new();
-        heap_storage.0.clock = || 1;
-        heap_storage
+    fn memory_storage() -> MemoryStorage {
+        let mut memory_storage = MemoryStorage::new();
+        memory_storage.0.clock = || 1;
+        memory_storage
     }
 
     #[test]
@@ -436,7 +436,7 @@ mod test {
         let batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
-            HeapStorage::new(),
+            MemoryStorage::new(),
             MockBatchSender::new());
 
         let result = batcher.put("test1");
@@ -450,12 +450,12 @@ mod test {
     fn send_manually() {
         init();
         let batch_sender = MockBatchSender::new();
-        let heap_storage = heap_storage();
+        let memory_storage = memory_storage();
 
         let batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
-            heap_storage,
+            memory_storage,
             batch_sender.clone());
 
         assert!(batcher.start());
@@ -487,12 +487,12 @@ mod test {
     fn store_by_time() {
         init();
         let batch_sender = NothingBatchSender::new();
-        let heap_storage = heap_storage();
+        let memory_storage = memory_storage();
 
         let mut batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
-            heap_storage.clone(),
+            memory_storage.clone(),
             batch_sender.clone());
 
         batcher.flush_period = Duration::from_secs(1);
@@ -501,12 +501,12 @@ mod test {
         assert!(batcher.start());
         batcher.put("test1").unwrap();
 
-        validate_batches_queue0(&heap_storage);
+        validate_batches_queue0(&memory_storage);
 
         batcher.clock = || SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         batcher.put("test2").unwrap();
 
-        validate_batches_queue1(&heap_storage);
+        validate_batches_queue1(&memory_storage);
 
         let cloned_batcher = batcher.clone();
         let stop_thread = thread::spawn(move || {
@@ -514,24 +514,24 @@ mod test {
         });
 
         thread::sleep(Duration::from_millis(1));
-        validate_batches_queue2(&heap_storage);
+        validate_batches_queue2(&memory_storage);
 
         batch_sender.0.store(true, Ordering::Relaxed);
         stop_thread.join().unwrap();
     }
 
     type BatchImplType<'a> = BatcherImpl<&'a str, String, JsonArrayRecordsBuilder,
-        JsonArrayRecordsBuilderFactory, Arc<BinaryBatch>, GzippedJsonDisplayBatchFactory<String>, HeapStorage, NothingBatchSender>;
+        JsonArrayRecordsBuilderFactory, Arc<BinaryBatch>, GzippedJsonDisplayBatchFactory<String>, MemoryStorage, NothingBatchSender>;
 
     fn validate_stored_by(batcher_consumer: impl Fn(&mut BatchImplType<'_>)) {
         init();
         let batch_sender = NothingBatchSender::new();
-        let heap_storage = heap_storage();
+        let memory_storage = memory_storage();
 
         let mut batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
-            heap_storage.clone(),
+            memory_storage.clone(),
             batch_sender.clone());
 
         batcher_consumer(&mut batcher);
@@ -539,7 +539,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.put("test2").unwrap();
 
-        validate_batches_queue1(&heap_storage);
+        validate_batches_queue1(&memory_storage);
 
         let cloned_batcher = batcher.clone();
         let stop_thread = thread::spawn(move || {
@@ -547,34 +547,34 @@ mod test {
         });
 
         thread::sleep(Duration::from_millis(1));
-        validate_batches_queue2(&heap_storage);
+        validate_batches_queue2(&memory_storage);
 
         batch_sender.0.store(true, Ordering::Relaxed);
         stop_thread.join().unwrap();
     }
 
-    fn validate_batches_queue(heap_storage: &HeapStorage, f: impl Fn(&VecDeque<Arc<BinaryBatch>>)) {
-        let mutex_guard = heap_storage.0.shared_state.mutex.lock().unwrap();
+    fn validate_batches_queue(memory_storage: &MemoryStorage, f: impl Fn(&VecDeque<Arc<BinaryBatch>>)) {
+        let mutex_guard = memory_storage.0.shared_state.mutex.lock().unwrap();
         let batches = &mutex_guard.batches_queue;
         f(batches);
     }
 
-    fn validate_batches_queue0(heap_storage: &HeapStorage) {
-        validate_batches_queue(&heap_storage, |batches| {
+    fn validate_batches_queue0(memory_storage: &MemoryStorage) {
+        validate_batches_queue(&memory_storage, |batches| {
             assert_eq!(batches.len(), 0);
         });
     }
 
-    fn validate_batches_queue1(heap_storage: &HeapStorage) {
-        validate_batches_queue(&heap_storage, |batches| {
+    fn validate_batches_queue1(memory_storage: &MemoryStorage) {
+        validate_batches_queue(&memory_storage, |batches| {
             assert_eq!(batches.len(), 1);
             assert_eq!(String::from_utf8(decompress_to_vec(&batches[0].bytes).unwrap()).unwrap(),
                        r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
         });
     }
 
-    fn validate_batches_queue2(heap_storage: &HeapStorage) {
-        validate_batches_queue(&heap_storage, |batches| {
+    fn validate_batches_queue2(memory_storage: &MemoryStorage) {
+        validate_batches_queue(&memory_storage, |batches| {
             assert_eq!(batches.len(), 2);
             assert_eq!(String::from_utf8(decompress_to_vec(&batches[1].bytes).unwrap()).unwrap(),
                        r#"{"serverId":s1,"batchId":2,"batch":[test2]}"#);

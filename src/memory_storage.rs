@@ -12,7 +12,7 @@ pub struct Interruption {
     interrupted: i32,
 }
 
-pub struct HeapStorageSharedState {
+pub struct MemoryStorageSharedState {
     pub(crate) batches_queue: VecDeque<Arc<BinaryBatch>>,
     occupied_bytes: usize,
     previous_batch_id: i64,
@@ -20,20 +20,20 @@ pub struct HeapStorageSharedState {
     stopped: bool,
 }
 
-pub struct HeapStorageSync {
-    pub(crate) mutex: Mutex<HeapStorageSharedState>,
+pub struct MemoryStorageSync {
+    pub(crate) mutex: Mutex<MemoryStorageSharedState>,
     condvar: Condvar,
 }
 
-pub struct HeapStorageGuard<'a> {
-    mutex_guard: Option<MutexGuard<'a, HeapStorageSharedState>>,
+pub struct MemoryStorageGuard<'a> {
+    mutex_guard: Option<MutexGuard<'a, MemoryStorageSharedState>>,
     condvar: &'a Condvar,
 }
 
-impl<'a> HeapStorageGuard<'a> {
-    fn from(storage_sync: &'a HeapStorageSync) -> HeapStorageGuard<'a> {
-        let HeapStorageSync { mutex, condvar, ..} = storage_sync;
-        HeapStorageGuard { mutex_guard: Some(mutex.lock().unwrap()), condvar}
+impl<'a> MemoryStorageGuard<'a> {
+    fn from(storage_sync: &'a MemoryStorageSync) -> MemoryStorageGuard<'a> {
+        let MemoryStorageSync { mutex, condvar, ..} = storage_sync;
+        MemoryStorageGuard { mutex_guard: Some(mutex.lock().unwrap()), condvar}
     }
 
     fn wait(&mut self) -> io::Result<()> {
@@ -55,47 +55,47 @@ impl<'a> HeapStorageGuard<'a> {
     }
 }
 
-impl<'a> Deref for HeapStorageGuard<'a> {
-    type Target = MutexGuard<'a, HeapStorageSharedState>;
+impl<'a> Deref for MemoryStorageGuard<'a> {
+    type Target = MutexGuard<'a, MemoryStorageSharedState>;
 
     fn deref(&self) -> &Self::Target {
         self.mutex_guard.as_ref().unwrap()
     }
 }
 
-impl<'a> DerefMut for HeapStorageGuard<'a> {
+impl<'a> DerefMut for MemoryStorageGuard<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.mutex_guard.as_mut().unwrap()
     }
 }
 
-trait HeapStorageThis {
-    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> io::Result<bool>;
-    fn store_batch(&self, heap_storage: &NonBlockingHeapStorage, batch: BinaryBatch, guard: HeapStorageGuard) -> io::Result<()>;
-    fn notify_after_remove(&self, heap_storage: &NonBlockingHeapStorage, condvar: &Condvar) {}
+trait MemoryStorageThis {
+    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch, guard: &mut MemoryStorageGuard) -> io::Result<bool>;
+    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch, guard: MemoryStorageGuard) -> io::Result<()>;
+    fn notify_after_remove(&self, memory_storage: &NonBlockingMemoryStorage, condvar: &Condvar) {}
 }
 
 #[derive(Clone)]
-pub struct NonBlockingHeapStorage {
+pub struct NonBlockingMemoryStorage {
     pub max_bytes: usize,
     pub clock: fn() -> i64,
-    this: Arc<dyn HeapStorageThis + Send + Sync>,
-    pub(crate) shared_state: Arc<HeapStorageSync>
+    this: Arc<dyn MemoryStorageThis + Send + Sync>,
+    pub(crate) shared_state: Arc<MemoryStorageSync>
 }
 
-impl NonBlockingHeapStorage {
+impl NonBlockingMemoryStorage {
 
-    pub fn new() -> NonBlockingHeapStorage {
-        NonBlockingHeapStorage::with_max_batch_bytes(DEFAULT_MAX_BYTES_IN_QUEUE)
+    pub fn new() -> NonBlockingMemoryStorage {
+        NonBlockingMemoryStorage::with_max_batch_bytes(DEFAULT_MAX_BYTES_IN_QUEUE)
     }
 
-    pub fn with_max_batch_bytes(max_bytes: usize) -> NonBlockingHeapStorage {
-        NonBlockingHeapStorage {
+    pub fn with_max_batch_bytes(max_bytes: usize) -> NonBlockingMemoryStorage {
+        NonBlockingMemoryStorage {
             max_bytes,
             clock: crate::batch_storage::time_from_epoch_millis,
             this: Arc::new(Base),
-            shared_state: Arc::new(HeapStorageSync {
-                mutex: Mutex::new(HeapStorageSharedState {
+            shared_state: Arc::new(MemoryStorageSync {
+                mutex: Mutex::new(MemoryStorageSharedState {
                     batches_queue: VecDeque::new(),
                     occupied_bytes: 0,
                     previous_batch_id: 0,
@@ -111,18 +111,18 @@ impl NonBlockingHeapStorage {
 
 struct Base;
 
-impl HeapStorageThis for Base {
-    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> io::Result<bool> {
-        Ok(guard.occupied_bytes + batch.bytes.len() > heap_storage.max_bytes)
+impl MemoryStorageThis for Base {
+    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch, guard: &mut MemoryStorageGuard) -> io::Result<bool> {
+        Ok(guard.occupied_bytes + batch.bytes.len() > memory_storage.max_bytes)
     }
 
-    fn store_batch(&self, heap_storage: &NonBlockingHeapStorage, batch: BinaryBatch, mut guard: HeapStorageGuard) -> io::Result<()> {
+    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch, mut guard: MemoryStorageGuard) -> io::Result<()> {
         if guard.stopped {
             return Err(Error::new(ErrorKind::Interrupted, "The storage has been stopped"))
         }
 
-        if heap_storage.this.is_capacity_exceeded(heap_storage, &batch, &mut guard)? {
-            return Err(Error::new(ErrorKind::Other, format!("Storage capacity {} exceeded by {}", heap_storage.max_bytes, batch.bytes.len())));
+        if memory_storage.this.is_capacity_exceeded(memory_storage, &batch, &mut guard)? {
+            return Err(Error::new(ErrorKind::Other, format!("Storage capacity {} exceeded by {}", memory_storage.max_bytes, batch.bytes.len())));
         }
 
         guard.previous_batch_id = batch.batch_id;
@@ -135,9 +135,9 @@ impl HeapStorageThis for Base {
     }
 }
 
-impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
+impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
     fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
-        let guard = HeapStorageGuard::from(&self.shared_state);
+        let guard = MemoryStorageGuard::from(&self.shared_state);
 
         let epoch = (self.clock)();
         let batch_id = if epoch > guard.previous_batch_id {
@@ -150,7 +150,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
     }
 
     fn get(&self) -> io::Result<Arc<BinaryBatch>> {
-        let mut guard = HeapStorageGuard::from(&self.shared_state);
+        let mut guard = MemoryStorageGuard::from(&self.shared_state);
         loop {
             if let Some(batch) = guard.batches_queue.front() {
                 return Ok(batch.clone());
@@ -179,7 +179,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
     }
 
     fn shutdown(self) {
-        let mut guard = HeapStorageGuard::from(&self.shared_state);
+        let mut guard = MemoryStorageGuard::from(&self.shared_state);
         guard.stopped = true;
         guard.interrupt();
     }
@@ -188,43 +188,43 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingHeapStorage {
 
 ///-------------------------------------------------------------------------------------------------
 
-struct Blocking(Box<dyn HeapStorageThis + Send + Sync>);
+struct Blocking(Box<dyn MemoryStorageThis + Send + Sync>);
 
-impl HeapStorageThis for Blocking {
-    fn is_capacity_exceeded(&self, heap_storage: &NonBlockingHeapStorage, batch: &BinaryBatch, guard: &mut HeapStorageGuard) -> io::Result<bool> {
+impl MemoryStorageThis for Blocking {
+    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch, guard: &mut MemoryStorageGuard) -> io::Result<bool> {
         loop {
-            if !self.0.is_capacity_exceeded(heap_storage, batch, guard)? {
+            if !self.0.is_capacity_exceeded(memory_storage, batch, guard)? {
                 return Ok(false)
             }
             guard.wait()?;
         }
     }
 
-    fn store_batch(&self, heap_storage: &NonBlockingHeapStorage, batch: BinaryBatch, guard: HeapStorageGuard) -> Result<(), Error> {
-        self.0.store_batch(heap_storage, batch, guard)
+    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch, guard: MemoryStorageGuard) -> Result<(), Error> {
+        self.0.store_batch(memory_storage, batch, guard)
     }
 
-    fn notify_after_remove(&self, heap_storage: &NonBlockingHeapStorage, condvar: &Condvar) {
+    fn notify_after_remove(&self, memory_storage: &NonBlockingMemoryStorage, condvar: &Condvar) {
         condvar.notify_one();
     }
 }
 
 #[derive(Clone)]
-pub struct HeapStorage(pub NonBlockingHeapStorage);
+pub struct MemoryStorage(pub NonBlockingMemoryStorage);
 
-impl HeapStorage {
-    pub fn new() -> HeapStorage {
-        HeapStorage::with_max_batch_bytes(DEFAULT_MAX_BYTES_IN_QUEUE)
+impl MemoryStorage {
+    pub fn new() -> MemoryStorage {
+        MemoryStorage::with_max_batch_bytes(DEFAULT_MAX_BYTES_IN_QUEUE)
     }
 
-    pub fn with_max_batch_bytes(max_bytes: usize) -> HeapStorage {
-        let mut non_blocking_heap_storage = NonBlockingHeapStorage::with_max_batch_bytes(max_bytes);
-        non_blocking_heap_storage.this = Arc::new(Blocking(Box::new(Base)));
-        HeapStorage(non_blocking_heap_storage)
+    pub fn with_max_batch_bytes(max_bytes: usize) -> MemoryStorage {
+        let mut non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_batch_bytes(max_bytes);
+        non_blocking_memory_storage.this = Arc::new(Blocking(Box::new(Base)));
+        MemoryStorage(non_blocking_memory_storage)
     }
 }
 
-impl<'a> BatchStorage<Arc<BinaryBatch>> for HeapStorage {
+impl<'a> BatchStorage<Arc<BinaryBatch>> for MemoryStorage {
     fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
         self.0.store(actions, batch_factory)
     }
@@ -252,47 +252,47 @@ impl<'a> BatchStorage<Arc<BinaryBatch>> for HeapStorage {
 
 
 #[cfg(test)]
-mod test_non_blocking_heap_storage {
+mod test_non_blocking_memory_storage {
     use crate::batch_storage::{BinaryBatch, BatchStorage};
-    use crate::heap_storage::NonBlockingHeapStorage;
+    use crate::memory_storage::NonBlockingMemoryStorage;
     use std::io;
 
     const BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
 
     #[test]
     fn drop_if_out_of_capacity() {
-        let non_blocking_heap_storage = NonBlockingHeapStorage::with_max_batch_bytes(0);
-        let result = non_blocking_heap_storage.store("Test".to_string(), &BATCH_FACTORY);
+        let non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_batch_bytes(0);
+        let result = non_blocking_memory_storage.store("Test".to_string(), &BATCH_FACTORY);
 
         assert_eq!("Storage capacity 0 exceeded by 2".to_string(), result.unwrap_err().to_string());
-        assert!(non_blocking_heap_storage.is_empty());
+        assert!(non_blocking_memory_storage.is_empty());
     }
 
     #[test]
     fn producer_first() {
-        let mut non_blocking_heap_storage = NonBlockingHeapStorage::new();
-        non_blocking_heap_storage.clock = || 1;
-        crate::heap_storage::test::producer_first(non_blocking_heap_storage);
+        let mut non_blocking_memory_storage = NonBlockingMemoryStorage::new();
+        non_blocking_memory_storage.clock = || 1;
+        crate::memory_storage::test::producer_first(non_blocking_memory_storage);
     }
 
     #[test]
     fn consumer_first() {
-        let mut non_blocking_heap_storage = NonBlockingHeapStorage::new();
-        non_blocking_heap_storage.clock = || 1;
-        crate::heap_storage::test::consumer_first(non_blocking_heap_storage);
+        let mut non_blocking_memory_storage = NonBlockingMemoryStorage::new();
+        non_blocking_memory_storage.clock = || 1;
+        crate::memory_storage::test::consumer_first(non_blocking_memory_storage);
     }
 
     #[test]
     fn shutdown() {
-        let non_blocking_heap_storage = NonBlockingHeapStorage::new();
-        crate::heap_storage::test::shutdown(non_blocking_heap_storage);
+        let non_blocking_memory_storage = NonBlockingMemoryStorage::new();
+        crate::memory_storage::test::shutdown(non_blocking_memory_storage);
     }
 }
 
 #[cfg(test)]
-mod test_heap_storage {
+mod test_memory_storage {
     use crate::batch_storage::{BinaryBatch, BatchStorage};
-    use crate::heap_storage::HeapStorage;
+    use crate::memory_storage::MemoryStorage;
     use std::{io, thread};
     use std::time::Duration;
 
@@ -300,37 +300,37 @@ mod test_heap_storage {
 
     #[test]
     fn blocks_forever() {
-        let heap_storage = HeapStorage::with_max_batch_bytes(1);
-        assert!(heap_storage.store("Test1".to_string(), &BATCH_FACTORY).is_ok());
+        let memory_storage = MemoryStorage::with_max_batch_bytes(1);
+        assert!(memory_storage.store("Test1".to_string(), &BATCH_FACTORY).is_ok());
 
-        let cloned_storage = heap_storage.clone();
+        let cloned_storage = memory_storage.clone();
         let join_handle = thread::spawn(move || {
             assert!(cloned_storage.store("Test2".to_string(), &BATCH_FACTORY).is_ok());
         });
 
         thread::sleep(Duration::from_millis(10));
 
-        assert_eq!(1, heap_storage.0.shared_state.mutex.lock().unwrap().batches_queue.len());
+        assert_eq!(1, memory_storage.0.shared_state.mutex.lock().unwrap().batches_queue.len());
     }
 
     #[test]
     fn producer_first() {
-        let mut heap_storage = HeapStorage::new();
-        heap_storage.0.clock = || 1;
-        crate::heap_storage::test::producer_first(heap_storage);
+        let mut memory_storage = MemoryStorage::new();
+        memory_storage.0.clock = || 1;
+        crate::memory_storage::test::producer_first(memory_storage);
     }
 
     #[test]
     fn consumer_first() {
-        let mut heap_storage = HeapStorage::new();
-        heap_storage.0.clock = || 1;
-        crate::heap_storage::test::consumer_first(heap_storage);
+        let mut memory_storage = MemoryStorage::new();
+        memory_storage.0.clock = || 1;
+        crate::memory_storage::test::consumer_first(memory_storage);
     }
 
     #[test]
     fn shutdown() {
-        let heap_storage = HeapStorage::new();
-        crate::heap_storage::test::shutdown(heap_storage);
+        let memory_storage = MemoryStorage::new();
+        crate::memory_storage::test::shutdown(memory_storage);
     }
 }
 
@@ -345,29 +345,29 @@ mod test {
 
     pub(crate) static BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
 
-    pub(crate) fn producer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(heap_storage: T) {
-        assert!(heap_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
-        assert!(!heap_storage.is_empty());
+    pub(crate) fn producer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(memory_storage: T) {
+        assert!(memory_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
+        assert!(!memory_storage.is_empty());
 
-        let consumer_thread = start_consumer_thread(heap_storage.clone());
+        let consumer_thread = start_consumer_thread(memory_storage.clone());
         consumer_thread.join().unwrap();
 
-        assert!(heap_storage.is_empty());
+        assert!(memory_storage.is_empty());
     }
 
-    pub(crate) fn consumer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(heap_storage: T) {
-        let consumer_thread = start_consumer_thread(heap_storage.clone());
+    pub(crate) fn consumer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(memory_storage: T) {
+        let consumer_thread = start_consumer_thread(memory_storage.clone());
         thread::sleep(Duration::from_millis(1));
 
-        assert!(heap_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
+        assert!(memory_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
 
         consumer_thread.join().unwrap();
 
-        assert!(heap_storage.is_empty());
+        assert!(memory_storage.is_empty());
     }
 
-    pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(heap_storage: T) {
-        let cloned_storage = heap_storage.clone();
+    pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(memory_storage: T) {
+        let cloned_storage = memory_storage.clone();
         let consumer_thread = thread::spawn(move || {
             let get_result = cloned_storage.get();
             cloned_storage.remove();
@@ -375,16 +375,16 @@ mod test {
         });
 
         thread::sleep(Duration::from_millis(1));
-        heap_storage.clone().shutdown();
+        memory_storage.clone().shutdown();
 
         let thread_result = consumer_thread.join().unwrap();
         assert!(thread_result.is_err());
         assert_eq!(ErrorKind::Interrupted, thread_result.err().unwrap().kind());
 
-        let store_result = heap_storage.store("Test".to_string(), &BATCH_FACTORY);
+        let store_result = memory_storage.store("Test".to_string(), &BATCH_FACTORY);
         assert!(store_result.is_err());
         assert_eq!(ErrorKind::Interrupted, store_result.err().unwrap().kind());
-        assert!(heap_storage.is_empty());
+        assert!(memory_storage.is_empty());
     }
 
     pub(crate) fn start_consumer_thread<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(cloned_storage: T) -> JoinHandle<()> {

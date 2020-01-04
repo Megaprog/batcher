@@ -5,7 +5,7 @@ use std::io::Read;
 
 mod http_client;
 mod batch_storage;
-mod heap_storage;
+mod memory_storage;
 mod file_storage;
 mod batch_sender;
 mod chained_error;
