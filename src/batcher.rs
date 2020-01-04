@@ -372,6 +372,7 @@ mod test {
     use std::time::Duration;
     use std::sync::{Once, Arc, Mutex};
     use env_logger::{Builder, Env};
+    use miniz_oxide::inflate::decompress_to_vec;
 
     #[derive(Clone)]
     struct MockBatchSender {
@@ -419,12 +420,14 @@ mod test {
     #[test]
     fn send_manually() {
         init();
-
         let batch_sender = MockBatchSender::new();
+        let mut heap_storage = HeapStorage::new();
+        heap_storage.0.clock = || 1;
+
         let batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
-            HeapStorage::new(),
+            heap_storage,
             batch_sender.clone());
 
         assert!(batcher.start());
@@ -437,6 +440,8 @@ mod test {
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 1);
-        println!("{:?}", batches_guard[0])
+
+        let decompressed = String::from_utf8(decompress_to_vec(&batches_guard[0]).unwrap()).unwrap();
+        assert_eq!(decompressed, r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
     }
 }

@@ -77,8 +77,8 @@ trait HeapStorageThis {
 
 #[derive(Clone)]
 pub struct NonBlockingHeapStorage {
-    max_bytes: usize,
-    clock: fn() -> i64,
+    pub max_bytes: usize,
+    pub clock: fn() -> i64,
     this: Arc<dyn HeapStorageThis + Send + Sync>,
     shared_state: Arc<HeapStorageSync>
 }
@@ -210,7 +210,7 @@ impl HeapStorageThis for Blocking {
 }
 
 #[derive(Clone)]
-pub struct HeapStorage(NonBlockingHeapStorage);
+pub struct HeapStorage(pub NonBlockingHeapStorage);
 
 impl HeapStorage {
     pub fn new() -> HeapStorage {
