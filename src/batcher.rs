@@ -223,7 +223,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                     Error::new(ErrorKind::Other,
                                ChainedError::new("The upload thread panicked with the reason", error))
                 } else {
-                    Error::new(ErrorKind::Other, "The upload thread panicked with unknown reason".to_string())
+                    Error::new(ErrorKind::Other, "The upload thread panicked with unknown reason")
                 }))
             .unwrap_or(Ok(()))
     }
@@ -232,7 +232,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         if mutex_guard.stopped {
             return Err(Error::new(ErrorKind::Interrupted,
                                   ChainedError::monad(
-                                      "The batcher has been stopped".to_string(),
+                                      "The batcher has been stopped",
                                       Box::new(mutex_guard.last_upload_result.clone()),
                                       Box::new(|any|
                                           any.downcast_ref::<Arc<io::Result<()>>>()
@@ -365,10 +365,10 @@ mod test {
     use crate::batch_sender::BatchSender;
     use std::io::{Error, ErrorKind};
     use crate::batcher::{BatcherImpl, Batcher};
-    use crate::batch_storage::{GzippedJsonDisplayBatchFactory, BinaryBatch};
+    use crate::batch_storage::{GzippedJsonDisplayBatchFactory, BinaryBatch, BatchStorage, BatchFactory};
     use crate::memory_storage::MemoryStorage;
     use crate::batch_records::{RECORDS_BUILDER_FACTORY, JsonArrayRecordsBuilder, JsonArrayRecordsBuilderFactory};
-    use std::thread;
+    use std::{thread, io};
     use std::time::{Duration, SystemTime};
     use std::sync::{Once, Arc, Mutex};
     use env_logger::{Builder, Env};
@@ -414,6 +414,38 @@ mod test {
                 }
             }
             Ok(None)
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct FailedStorage(MemoryStorage);
+
+    impl FailedStorage {
+        pub fn new() -> FailedStorage {
+            FailedStorage(MemoryStorage::new())
+        }
+    }
+
+    impl<'a> BatchStorage<Arc<BinaryBatch>> for FailedStorage {
+        fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
+            self.0.store(actions, batch_factory)?;
+            Err(Error::new(ErrorKind::Other, "FailedStorage always fails"))
+        }
+
+        fn get(&self) -> io::Result<Arc<BinaryBatch>> {
+            self.0.get()
+        }
+        fn remove(&self) -> io::Result<()> {
+            self.0.remove()
+        }
+        fn is_persistent(&self) -> bool {
+            self.0.is_persistent()
+        }
+        fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+        fn shutdown(self) {
+            self.0.shutdown();
         }
     }
 

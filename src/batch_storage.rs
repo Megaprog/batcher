@@ -43,9 +43,9 @@ pub struct GzippedJsonDisplayBatchFactory<T> {
 }
 
 impl<T> GzippedJsonDisplayBatchFactory<T> {
-    pub fn new(server_id: impl AsRef<str>) -> Self {
+    pub fn new(server_id: impl Into<String>) -> Self {
         GzippedJsonDisplayBatchFactory {
-            server_id: server_id.as_ref().to_string(),
+            server_id: server_id.into(),
             phantom: PhantomData
         }
     }

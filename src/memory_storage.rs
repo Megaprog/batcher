@@ -257,7 +257,7 @@ mod test_non_blocking_memory_storage {
     use crate::memory_storage::NonBlockingMemoryStorage;
     use std::io;
 
-    const BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
+    static BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
 
     #[test]
     fn drop_if_out_of_capacity() {

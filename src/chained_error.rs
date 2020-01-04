@@ -29,27 +29,27 @@ impl fmt::Debug for Source {
 }
 
 impl ChainedError {
-    pub fn without_source(description: impl AsRef<str>) -> ChainedError {
+    pub fn without_source(description: impl Into<String>) -> ChainedError {
         ChainedError {
-            description: description.as_ref().to_string(),
+            description: description.into(),
             source: Empty
         }
     }
 
-    pub fn new<E>(description: impl AsRef<str>, source: E) -> ChainedError
+    pub fn new<E>(description: impl Into<String>, source: E) -> ChainedError
         where E: Into<Box<dyn Error + Send + Sync>>
     {
         ChainedError {
-            description: description.as_ref().to_string(),
+            description: description.into(),
             source: Own(source.into())
         }
     }
 
-    pub fn optional<E>(description: impl AsRef<str>, source: Option<E>) -> ChainedError
+    pub fn optional<E>(description: impl Into<String>, source: Option<E>) -> ChainedError
         where E: Into<Box<dyn Error + Send + Sync>>
     {
         ChainedError {
-            description: description.as_ref().to_string(),
+            description: description.into(),
             source: match source {
                 Some(e) => Own(e.into()),
                 None => Empty
@@ -57,16 +57,16 @@ impl ChainedError {
         }
     }
 
-    pub fn result<T, E>(description: impl AsRef<str>, source: Result<T, E>) -> ChainedError
+    pub fn result<T, E>(description: impl Into<String>, source: Result<T, E>) -> ChainedError
         where E: Into<Box<dyn Error + Send + Sync>>
     {
         ChainedError::optional(description, source.err())
     }
 
-    pub fn monad(description: impl AsRef<str>, value: Box<dyn Any + Send + Sync>,
+    pub fn monad(description: impl Into<String>, value: Box<dyn Any + Send + Sync>,
                     func: Box<dyn Fn(&dyn Any) -> Option<&(dyn Error + 'static)> + Send + Sync>) -> ChainedError {
         ChainedError {
-            description: description.as_ref().to_string(),
+            description: description.into(),
             source: Ref(value, func),
         }
     }
