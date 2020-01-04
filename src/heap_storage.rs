@@ -13,7 +13,7 @@ pub struct Interruption {
 }
 
 pub struct HeapStorageSharedState {
-    batches_queue: VecDeque<Arc<BinaryBatch>>,
+    pub(crate) batches_queue: VecDeque<Arc<BinaryBatch>>,
     occupied_bytes: usize,
     previous_batch_id: i64,
     interruption: Interruption,
@@ -21,7 +21,7 @@ pub struct HeapStorageSharedState {
 }
 
 pub struct HeapStorageSync {
-    mutex: Mutex<HeapStorageSharedState>,
+    pub(crate) mutex: Mutex<HeapStorageSharedState>,
     condvar: Condvar,
 }
 
@@ -80,7 +80,7 @@ pub struct NonBlockingHeapStorage {
     pub max_bytes: usize,
     pub clock: fn() -> i64,
     this: Arc<dyn HeapStorageThis + Send + Sync>,
-    shared_state: Arc<HeapStorageSync>
+    pub(crate) shared_state: Arc<HeapStorageSync>
 }
 
 impl NonBlockingHeapStorage {

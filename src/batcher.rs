@@ -365,7 +365,7 @@ mod test {
     use crate::batch_sender::BatchSender;
     use std::io::{Error, ErrorKind};
     use crate::batcher::{BatcherImpl, Batcher};
-    use crate::batch_storage::GzippedJsonDisplayBatchFactory;
+    use crate::batch_storage::{GzippedJsonDisplayBatchFactory, BinaryBatch};
     use crate::heap_storage::HeapStorage;
     use crate::batch_records::RECORDS_BUILDER_FACTORY;
     use std::thread;
@@ -373,6 +373,8 @@ mod test {
     use std::sync::{Once, Arc, Mutex};
     use env_logger::{Builder, Env};
     use miniz_oxide::inflate::decompress_to_vec;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::collections::VecDeque;
 
     #[derive(Clone)]
     struct MockBatchSender {
@@ -390,6 +392,27 @@ mod test {
     impl BatchSender for MockBatchSender {
         fn send_batch(&self, batch: &[u8]) -> Result<Option<Error>, Error> {
             self.batches.lock().unwrap().push(batch.to_owned());
+            Ok(None)
+        }
+    }
+
+    #[derive(Clone)]
+    struct NothingBatchSender(Arc<AtomicBool>);
+
+    impl NothingBatchSender {
+        fn new() -> NothingBatchSender {
+            NothingBatchSender(Arc::new(AtomicBool::new(false)))
+        }
+    }
+
+    impl BatchSender for NothingBatchSender {
+        fn send_batch(&self, batch: &[u8]) -> Result<Option<Error>, Error> {
+            loop {
+                thread::sleep(Duration::from_millis(100));
+                if self.0.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
             Ok(None)
         }
     }
@@ -443,5 +466,51 @@ mod test {
 
         let decompressed = String::from_utf8(decompress_to_vec(&batches_guard[0]).unwrap()).unwrap();
         assert_eq!(decompressed, r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
+    }
+
+    #[test]
+    fn store_by_batch_actions() {
+        init();
+        let mut batch_sender = NothingBatchSender::new();
+        let mut heap_storage = HeapStorage::new();
+        heap_storage.0.clock = || 1;
+
+        let mut batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            heap_storage.clone(),
+            batch_sender.clone());
+
+        batcher.max_batch_records = 1;
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+        batcher.put("test2").unwrap();
+
+        validate_batches_queue(&heap_storage, |batches| {
+            assert_eq!(batches.len(), 1);
+            assert_eq!(String::from_utf8(decompress_to_vec(&batches[0].bytes).unwrap()).unwrap(),
+                       r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
+        });
+
+        let cloned_batcher = batcher.clone();
+        let stop_thread = thread::spawn(move || {
+            cloned_batcher.hard_stop().unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(1));
+        validate_batches_queue(&heap_storage, |batches| {
+            assert_eq!(batches.len(), 2);
+            assert_eq!(String::from_utf8(decompress_to_vec(&batches[1].bytes).unwrap()).unwrap(),
+                       r#"{"serverId":s1,"batchId":2,"batch":[test2]}"#);
+        });
+
+        batch_sender.0.store(true, Ordering::Relaxed);
+        stop_thread.join().unwrap();
+    }
+
+    fn validate_batches_queue(heap_storage: &HeapStorage, f: impl Fn(&VecDeque<Arc<BinaryBatch>>)) {
+        let mutex_guard = heap_storage.0.shared_state.mutex.lock().unwrap();
+        let batches = &mutex_guard.batches_queue;
+        f(batches);
     }
 }
