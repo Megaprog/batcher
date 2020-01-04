@@ -372,7 +372,6 @@ mod test {
     use std::time::Duration;
     use std::sync::{Once, Arc, Mutex};
     use env_logger::{Builder, Env};
-    use log::LevelFilter;
 
     #[derive(Clone)]
     struct MockBatchSender {
@@ -398,7 +397,7 @@ mod test {
 
     fn init() {
         INIT.call_once(|| {
-            env_logger::builder().is_test(true).filter_level(LevelFilter::Trace).init();
+            Builder::from_env(Env::default().default_filter_or("trace")).is_test(true).init();
         });
     }
 
