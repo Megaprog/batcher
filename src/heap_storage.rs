@@ -329,7 +329,7 @@ mod test_heap_storage {
 
     #[test]
     fn shutdown() {
-        let mut heap_storage = HeapStorage::new();
+        let heap_storage = HeapStorage::new();
         crate::heap_storage::test::shutdown(heap_storage);
     }
 }

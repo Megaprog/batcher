@@ -21,11 +21,9 @@ enum Source {
 impl fmt::Debug for Source {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Empty => write!(f, "Source {{ Empty }}"),
-            Own(e) => write!(f, "Source {{ Own({}) }}", e),
-            Ref(v, func) => write!(f, "Source {{ Ref({}) }}", match func(&**v) {
-                Some(e) => format!("Some({})", e),
-                None => "None".to_string()})
+            Empty => f.debug_tuple("Empty").finish(),
+            Own(e) => f.debug_tuple("Own").field(e).finish(),
+            Ref(v, func) => f.debug_tuple("Ref").field(&func(&**v)).finish()
         }
     }
 }

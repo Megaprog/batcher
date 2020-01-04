@@ -417,7 +417,7 @@ mod test {
         }
     }
 
-    const INIT: Once = Once::new();
+    static INIT: Once = Once::new();
 
     fn init() {
         INIT.call_once(|| {
