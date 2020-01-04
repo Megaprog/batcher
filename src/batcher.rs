@@ -367,7 +367,7 @@ mod test {
     use crate::batcher::{BatcherImpl, Batcher};
     use crate::batch_storage::{GzippedJsonDisplayBatchFactory, BinaryBatch};
     use crate::heap_storage::HeapStorage;
-    use crate::batch_records::RECORDS_BUILDER_FACTORY;
+    use crate::batch_records::{RECORDS_BUILDER_FACTORY, JsonArrayRecordsBuilder, JsonArrayRecordsBuilderFactory};
     use std::thread;
     use std::time::Duration;
     use std::sync::{Once, Arc, Mutex};
@@ -425,6 +425,12 @@ mod test {
         });
     }
 
+    fn heap_storage() -> HeapStorage {
+        let mut heap_storage = HeapStorage::new();
+        heap_storage.0.clock = || 1;
+        heap_storage
+    }
+
     #[test]
     fn do_not_start() {
         let batcher = BatcherImpl::new(
@@ -444,8 +450,7 @@ mod test {
     fn send_manually() {
         init();
         let batch_sender = MockBatchSender::new();
-        let mut heap_storage = HeapStorage::new();
-        heap_storage.0.clock = || 1;
+        let heap_storage = heap_storage();
 
         let batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
@@ -470,10 +475,19 @@ mod test {
 
     #[test]
     fn store_by_batch_actions() {
+        validate_stored_by(|batcher| batcher.max_batch_records = 1);
+    }
+
+    #[test]
+    fn store_by_batch_bytes() {
+        validate_stored_by(|batcher| batcher.max_batch_bytes = 1);
+    }
+
+    fn validate_stored_by(batcher_consumer: impl Fn(&mut BatcherImpl<&str, String, JsonArrayRecordsBuilder,
+        JsonArrayRecordsBuilderFactory, Arc<BinaryBatch>, GzippedJsonDisplayBatchFactory<String>, HeapStorage, NothingBatchSender>)) {
         init();
-        let mut batch_sender = NothingBatchSender::new();
-        let mut heap_storage = HeapStorage::new();
-        heap_storage.0.clock = || 1;
+        let batch_sender = NothingBatchSender::new();
+        let heap_storage = heap_storage();
 
         let mut batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
@@ -481,7 +495,7 @@ mod test {
             heap_storage.clone(),
             batch_sender.clone());
 
-        batcher.max_batch_records = 1;
+        batcher_consumer(&mut batcher);
         assert!(batcher.start());
         batcher.put("test1").unwrap();
         batcher.put("test2").unwrap();
