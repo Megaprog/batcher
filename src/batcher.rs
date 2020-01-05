@@ -663,6 +663,36 @@ mod test {
         });
     }
 
+    #[test]
+    fn persistent_storage_and_soft_stop() {
+        init();
+        let batch_sender = MockBatchSender::new();
+        let persistent_memory_storage = PersistentMemoryStorage(memory_storage());
+
+        let batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            persistent_memory_storage.clone(),
+            batch_sender.clone());
+
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+        batcher.put("test2").unwrap();
+
+        let cloned_batcher = batcher.clone();
+        let stop_thread = thread::spawn(move || {
+            cloned_batcher.soft_stop().unwrap()
+        }).join().unwrap();
+
+        let batches_guard = batch_sender.batches.lock().unwrap();
+        assert_eq!(batches_guard.len(), 2);
+        validate_batch(&batches_guard[0], BATCH1);
+        validate_batch(&batches_guard[1], BATCH2);
+
+        validate_batches_queue0(&persistent_memory_storage.0);
+    }
+
     type BatchImplType<'a> = BatcherImpl<&'a str, String, JsonArrayRecordsBuilder,
         JsonArrayRecordsBuilderFactory, Arc<BinaryBatch>, GzippedJsonDisplayBatchFactory<String>, MemoryStorage, NothingBatchSender>;
 
