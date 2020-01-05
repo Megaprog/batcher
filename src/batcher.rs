@@ -394,6 +394,7 @@ mod test {
     impl BatchSender for MockBatchSender {
         fn send_batch(&self, batch: &[u8]) -> Result<Option<Error>, Error> {
             self.batches.lock().unwrap().push(batch.to_owned());
+            thread::sleep(Duration::from_millis(1));
             Ok(None)
         }
     }
@@ -422,12 +423,6 @@ mod test {
     #[derive(Clone)]
     pub struct PersistentMemoryStorage(MemoryStorage);
 
-    impl PersistentMemoryStorage {
-        fn new() -> PersistentMemoryStorage {
-            PersistentMemoryStorage(MemoryStorage::new())
-        }
-    }
-
     impl<'a> BatchStorage<Arc<BinaryBatch>> for PersistentMemoryStorage {
         fn store<T>(&self, records: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
             self.0.store(records, batch_factory)
@@ -450,6 +445,9 @@ mod test {
         }
     }
 
+    const BATCH1: &str = r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#;
+    const BATCH2: &str = r#"{"serverId":s1,"batchId":2,"batch":[test2]}"#;
+
     static INIT: Once = Once::new();
 
     fn init() {
@@ -459,9 +457,9 @@ mod test {
     }
 
     fn memory_storage() -> MemoryStorage {
-        let mut memory_storage = MemoryStorage::new();
-        memory_storage.0.clock = || 1;
-        memory_storage
+        let mut storage = MemoryStorage::new();
+        storage.0.clock = || 1;
+        storage
     }
 
     #[test]
@@ -501,9 +499,7 @@ mod test {
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 1);
-
-        let decompressed = String::from_utf8(decompress_to_vec(&batches_guard[0]).unwrap()).unwrap();
-        assert_eq!(decompressed, r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
+        validate_batch(&batches_guard[0], BATCH1);
     }
 
     #[test]
@@ -595,8 +591,7 @@ mod test {
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 1);
-        let decompressed = String::from_utf8(decompress_to_vec(&batches_guard[0]).unwrap()).unwrap();
-        assert_eq!(decompressed, r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
+        validate_batch(&batches_guard[0], BATCH1);
 
         let cloned_batcher = batcher.clone();
         let stop_thread = thread::spawn(move || {
@@ -630,12 +625,42 @@ mod test {
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 2);
-        assert_eq!(String::from_utf8(decompress_to_vec(&batches_guard[0]).unwrap()).unwrap()
-                   , r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
-        assert_eq!(String::from_utf8(decompress_to_vec(&batches_guard[1]).unwrap()).unwrap()
-                   , r#"{"serverId":s1,"batchId":2,"batch":[test2]}"#);
+        validate_batch(&batches_guard[0], BATCH1);
+        validate_batch(&batches_guard[1], BATCH2);
 
         validate_batches_queue0(&memory_storage);
+    }
+
+    #[test]
+    fn persistent_storage_and_stop() {
+        init();
+        let batch_sender = MockBatchSender::new();
+        let persistent_memory_storage = PersistentMemoryStorage(memory_storage());
+
+        let batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            persistent_memory_storage.clone(),
+            batch_sender.clone());
+
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+        batcher.put("test2").unwrap();
+
+        let cloned_batcher = batcher.clone();
+        let stop_thread = thread::spawn(move || {
+            cloned_batcher.stop().unwrap()
+        }).join().unwrap();
+
+        let batches_guard = batch_sender.batches.lock().unwrap();
+        assert_eq!(batches_guard.len(), 1);
+        validate_batch(&batches_guard[0], BATCH1);
+
+        validate_batches_queue(&persistent_memory_storage.0, |batches| {
+            assert_eq!(batches.len(), 1);
+            validate_batch(&batches[0].bytes, BATCH2);
+        });
     }
 
     type BatchImplType<'a> = BatcherImpl<&'a str, String, JsonArrayRecordsBuilder,
@@ -686,16 +711,18 @@ mod test {
     fn validate_batches_queue1(memory_storage: &MemoryStorage) {
         validate_batches_queue(&memory_storage, |batches| {
             assert_eq!(batches.len(), 1);
-            assert_eq!(String::from_utf8(decompress_to_vec(&batches[0].bytes).unwrap()).unwrap(),
-                       r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
+            validate_batch(&batches[0].bytes, BATCH1);
         });
     }
 
     fn validate_batches_queue2(memory_storage: &MemoryStorage) {
         validate_batches_queue(&memory_storage, |batches| {
             assert_eq!(batches.len(), 2);
-            assert_eq!(String::from_utf8(decompress_to_vec(&batches[1].bytes).unwrap()).unwrap(),
-                       r#"{"serverId":s1,"batchId":2,"batch":[test2]}"#);
+            validate_batch(&batches[1].bytes, BATCH2);
         });
+    }
+
+    fn validate_batch(bytes: &[u8], batch: &str) {
+        assert_eq!(String::from_utf8(decompress_to_vec(bytes).unwrap()).unwrap(), batch);
     }
 }
