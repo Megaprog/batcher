@@ -254,7 +254,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                                            self.builder_factory.create_builder());
         let len = records_builder.len();
         let size = records_builder.size();
-        trace!("Flushing {} bytes in {} actions", size, len);
+        trace!("Flushing {} bytes in {} records", size, len);
 
         if len == 0 {
             debug!("Nothing to flush");
@@ -263,10 +263,10 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
 
         let result = self.batch_storage.store(records_builder.build(), &self.batch_factory);
         if result.is_ok() {
-            debug!("Flushing completed for {} bytes in {} actions", size, len);
+            debug!("Flushing completed for {} bytes in {} records", size, len);
             mutex_guard.last_flush_time = (self.clock)();
         } else {
-            warn!("Flushing failed for {} bytes in {} actions with error: {}", size, len, result.as_ref().unwrap_err());
+            warn!("Flushing failed for {} bytes in {} records with error: {}", size, len, result.as_ref().unwrap_err());
         }
 
         result
@@ -366,7 +366,7 @@ mod test {
     use std::io::{Error, ErrorKind};
     use crate::batcher::{BatcherImpl, Batcher};
     use crate::batch_storage::{GzippedJsonDisplayBatchFactory, BinaryBatch, BatchStorage, BatchFactory};
-    use crate::memory_storage::MemoryStorage;
+    use crate::memory_storage::{MemoryStorage, NonBlockingMemoryStorage};
     use crate::batch_records::{RECORDS_BUILDER_FACTORY, JsonArrayRecordsBuilder, JsonArrayRecordsBuilderFactory};
     use std::{thread, io};
     use std::time::{Duration, SystemTime};
@@ -375,6 +375,8 @@ mod test {
     use miniz_oxide::inflate::decompress_to_vec;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::collections::VecDeque;
+    use miniz_oxide::MZError::Mem;
+    use std::fs::set_permissions;
 
     #[derive(Clone)]
     struct MockBatchSender {
@@ -418,18 +420,17 @@ mod test {
     }
 
     #[derive(Clone)]
-    pub struct FailedStorage(MemoryStorage);
+    pub struct PersistentMemoryStorage(MemoryStorage);
 
-    impl FailedStorage {
-        pub fn new() -> FailedStorage {
-            FailedStorage(MemoryStorage::new())
+    impl PersistentMemoryStorage {
+        fn new() -> PersistentMemoryStorage {
+            PersistentMemoryStorage(MemoryStorage::new())
         }
     }
 
-    impl<'a> BatchStorage<Arc<BinaryBatch>> for FailedStorage {
-        fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
-            self.0.store(actions, batch_factory)?;
-            Err(Error::new(ErrorKind::Other, "FailedStorage always fails"))
+    impl<'a> BatchStorage<Arc<BinaryBatch>> for PersistentMemoryStorage {
+        fn store<T>(&self, records: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
+            self.0.store(records, batch_factory)
         }
 
         fn get(&self) -> io::Result<Arc<BinaryBatch>> {
@@ -439,13 +440,13 @@ mod test {
             self.0.remove()
         }
         fn is_persistent(&self) -> bool {
-            self.0.is_persistent()
+            true
         }
         fn is_empty(&self) -> bool {
             self.0.is_empty()
         }
         fn shutdown(self) {
-            self.0.shutdown();
+            self.0.shutdown()
         }
     }
 
@@ -506,7 +507,7 @@ mod test {
     }
 
     #[test]
-    fn store_by_batch_actions() {
+    fn store_by_batch_records() {
         validate_stored_by(|batcher| batcher.max_batch_records = 1);
     }
 
@@ -550,6 +551,91 @@ mod test {
 
         batch_sender.0.store(true, Ordering::Relaxed);
         stop_thread.join().unwrap();
+    }
+
+    #[test]
+    fn store_discarded() {
+        init();
+        let batch_sender = NothingBatchSender::new();
+        let memory_storage = NonBlockingMemoryStorage::with_max_batch_bytes(0);
+
+        let mut batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            memory_storage.clone(),
+            batch_sender);
+
+        batcher.max_batch_records = 1;
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+
+        let result = batcher.put("test2");
+
+        assert!(result.unwrap_err().to_string().starts_with("Storage capacity exceeded"));
+        assert!(memory_storage.is_empty());
+    }
+
+    #[test]
+    fn sender_success() {
+        init();
+        let batch_sender = MockBatchSender::new();
+        let memory_storage = memory_storage();
+
+        let batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            memory_storage.clone(),
+            batch_sender.clone());
+
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+
+        thread::sleep(Duration::from_millis(1));
+
+        let batches_guard = batch_sender.batches.lock().unwrap();
+        assert_eq!(batches_guard.len(), 1);
+        let decompressed = String::from_utf8(decompress_to_vec(&batches_guard[0]).unwrap()).unwrap();
+        assert_eq!(decompressed, r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
+
+        let cloned_batcher = batcher.clone();
+        let stop_thread = thread::spawn(move || {
+            cloned_batcher.stop().unwrap()
+        }).join().unwrap();
+
+        validate_batches_queue0(&memory_storage);
+    }
+
+    #[test]
+    fn sender_success_several_batches() {
+        init();
+        let batch_sender = MockBatchSender::new();
+        let memory_storage = memory_storage();
+
+        let batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            memory_storage.clone(),
+            batch_sender.clone());
+
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+        batcher.put("test2").unwrap();
+
+        let cloned_batcher = batcher.clone();
+        let stop_thread = thread::spawn(move || {
+            cloned_batcher.stop().unwrap()
+        }).join().unwrap();
+
+        let batches_guard = batch_sender.batches.lock().unwrap();
+        assert_eq!(batches_guard.len(), 2);
+        assert_eq!(String::from_utf8(decompress_to_vec(&batches_guard[0]).unwrap()).unwrap()
+                   , r#"{"serverId":s1,"batchId":1,"batch":[test1]}"#);
+        assert_eq!(String::from_utf8(decompress_to_vec(&batches_guard[1]).unwrap()).unwrap()
+                   , r#"{"serverId":s1,"batchId":2,"batch":[test2]}"#);
+
+        validate_batches_queue0(&memory_storage);
     }
 
     type BatchImplType<'a> = BatcherImpl<&'a str, String, JsonArrayRecordsBuilder,

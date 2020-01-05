@@ -122,7 +122,9 @@ impl MemoryStorageThis for Base {
         }
 
         if memory_storage.this.is_capacity_exceeded(memory_storage, &batch, &mut guard)? {
-            return Err(Error::new(ErrorKind::Other, format!("Storage capacity {} exceeded by {}", memory_storage.max_bytes, batch.bytes.len())));
+            return Err(Error::new(ErrorKind::Other,
+                                  format!("Storage capacity exceeded: needed {} bytes, remains {} of {}",
+                                          batch.bytes.len(), (memory_storage.max_bytes - guard.occupied_bytes), memory_storage.max_bytes)));
         }
 
         guard.previous_batch_id = batch.batch_id;
@@ -264,7 +266,7 @@ mod test_non_blocking_memory_storage {
         let non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_batch_bytes(0);
         let result = non_blocking_memory_storage.store("Test".to_string(), &BATCH_FACTORY);
 
-        assert_eq!("Storage capacity 0 exceeded by 2".to_string(), result.unwrap_err().to_string());
+        assert!(result.unwrap_err().to_string().starts_with("Storage capacity exceeded"));
         assert!(non_blocking_memory_storage.is_empty());
     }
 
