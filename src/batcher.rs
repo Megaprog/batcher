@@ -419,11 +419,8 @@ mod test {
 
     impl BatchSender for NothingBatchSender {
         fn send_batch(&self, batch: &[u8]) -> Result<Option<Error>, Error> {
-            loop {
-                thread::sleep(Duration::from_millis(1));
-                if self.0.load(Ordering::Relaxed) {
-                    break;
-                }
+            while !self.0.load(Ordering::Relaxed) {
+                thread::yield_now();
             }
             Ok(None)
         }
