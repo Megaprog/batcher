@@ -123,7 +123,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         let mut uploaded_batch_counter = 0;
         let mut all_batch_counter = 0;
         let mut send_batches_bytes = 0;
-        loop {
+        'outer: loop {
             let batch_read_start = (self.clock)();
             let batch_result = self.batch_storage.get();
             if let Err(e) = batch_result {
@@ -170,17 +170,17 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
 
                 thread::sleep(self.failed_upload_timeout);
 
+                let mutex_guard = self.shared_state.lock().unwrap();
+                if mutex_guard.stopped && self.should_interrupt(mutex_guard) {
+                    break 'outer;
+                }
+
                 if !self.retry_batch_upload {
                     self.try_remove(&batch);
                     break;
                 }
 
                 info!("Retrying the {}", *batch);
-            }
-
-            let mutex_guard = self.shared_state.lock().unwrap();
-            if mutex_guard.stopped && self.should_interrupt(mutex_guard) {
-                break;
             }
         }
 
@@ -375,27 +375,31 @@ mod test {
     use miniz_oxide::inflate::decompress_to_vec;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::collections::VecDeque;
-    use miniz_oxide::MZError::Mem;
-    use std::fs::set_permissions;
 
     #[derive(Clone)]
     struct MockBatchSender {
-        batches: Arc<Mutex<Vec<Vec<u8>>>>
+        batches: Arc<Mutex<Vec<Vec<u8>>>>,
+        result_supplier: Arc<dyn Fn() -> io::Result<Option<Error>> + Send + Sync>
     }
 
     impl MockBatchSender {
         fn new() -> MockBatchSender {
+            MockBatchSender::with_result(Arc::new(|| Ok(None)))
+        }
+
+        fn with_result(result_supplier: Arc<dyn Fn() -> io::Result<Option<Error>> + Send + Sync>) -> MockBatchSender {
             MockBatchSender {
-                batches: Arc::new(Mutex::new(Vec::new()))
+                batches: Arc::new(Mutex::new(Vec::new())),
+                result_supplier
             }
         }
     }
 
     impl BatchSender for MockBatchSender {
-        fn send_batch(&self, batch: &[u8]) -> Result<Option<Error>, Error> {
+        fn send_batch(&self, batch: &[u8]) -> io::Result<Option<Error>> {
             self.batches.lock().unwrap().push(batch.to_owned());
             thread::sleep(Duration::from_millis(1));
-            Ok(None)
+            (self.result_supplier)()
         }
     }
 
@@ -593,10 +597,7 @@ mod test {
         assert_eq!(batches_guard.len(), 1);
         validate_batch(&batches_guard[0], BATCH1);
 
-        let cloned_batcher = batcher.clone();
-        let stop_thread = thread::spawn(move || {
-            cloned_batcher.stop().unwrap()
-        }).join().unwrap();
+        batcher.stop().unwrap();
 
         validate_batches_queue0(&memory_storage);
     }
@@ -618,10 +619,7 @@ mod test {
         batcher.flush().unwrap();
         batcher.put("test2").unwrap();
 
-        let cloned_batcher = batcher.clone();
-        let stop_thread = thread::spawn(move || {
-            cloned_batcher.stop().unwrap()
-        }).join().unwrap();
+        batcher.stop().unwrap();
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 2);
@@ -648,10 +646,7 @@ mod test {
         batcher.flush().unwrap();
         batcher.put("test2").unwrap();
 
-        let cloned_batcher = batcher.clone();
-        let stop_thread = thread::spawn(move || {
-            cloned_batcher.stop().unwrap()
-        }).join().unwrap();
+        batcher.stop().unwrap();
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 1);
@@ -680,10 +675,7 @@ mod test {
         batcher.flush().unwrap();
         batcher.put("test2").unwrap();
 
-        let cloned_batcher = batcher.clone();
-        let stop_thread = thread::spawn(move || {
-            cloned_batcher.soft_stop().unwrap()
-        }).join().unwrap();
+        batcher.soft_stop().unwrap();
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 2);
@@ -691,6 +683,37 @@ mod test {
         validate_batch(&batches_guard[1], BATCH2);
 
         validate_batches_queue0(&persistent_memory_storage.0);
+    }
+
+    #[test]
+    fn sender_fail() {
+        init();
+        let batch_sender = MockBatchSender::with_result(Arc::new(
+            || Ok(Some(Error::new(ErrorKind::Other, "Test error")))));
+        let memory_storage = memory_storage();
+
+        let mut  batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            memory_storage.clone(),
+            batch_sender.clone());
+
+        batcher.failed_upload_timeout = Duration::from_millis(1);
+        assert!(batcher.start());
+
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+
+        thread::sleep(Duration::from_millis(5));
+
+        batcher.hard_stop().unwrap();
+
+        let batches_guard = batch_sender.batches.lock().unwrap();
+        assert!(batches_guard.len() >= 2);
+        validate_batch(&batches_guard[0], BATCH1);
+        validate_batch(&batches_guard[1], BATCH1);
+
+        validate_batches_queue1(&memory_storage);
     }
 
     type BatchImplType<'a> = BatcherImpl<&'a str, String, JsonArrayRecordsBuilder,
