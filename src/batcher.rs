@@ -155,7 +155,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                     return;
                 }
 
-                debug!("{} finished. Took {:?}", *batch, self.since(batch_upload_start));
+                debug!("{} send time: {:?}", *batch, self.since(batch_upload_start));
 
                 if let Ok(None) = send_result {
                     trace!("{} successfully uploaded", *batch);
@@ -166,17 +166,21 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                     break;
                 }
 
-                warn!("Error while uploading {}: {}", *batch, send_result.unwrap().unwrap());
+                warn!("Error while sending {}: {}", *batch, send_result.unwrap().unwrap());
 
                 thread::sleep(self.failed_upload_timeout);
 
+                if !self.retry_batch_upload {
+                    self.try_remove(&batch);
+                }
+
                 let mutex_guard = self.shared_state.lock().unwrap();
                 if mutex_guard.stopped && self.should_interrupt(mutex_guard) {
+                    debug!("Upload stopped");
                     break 'outer;
                 }
 
                 if !self.retry_batch_upload {
-                    self.try_remove(&batch);
                     break;
                 }
 
@@ -704,7 +708,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(40));
 
         batcher.hard_stop().unwrap();
 
@@ -712,6 +716,65 @@ mod test {
         assert!(batches_guard.len() >= 2);
         validate_batch(&batches_guard[0], BATCH1);
         validate_batch(&batches_guard[1], BATCH1);
+
+        validate_batches_queue1(&memory_storage);
+    }
+
+    #[test]
+    fn sender_fail_do_not_retry_upload() {
+        init();
+        let batch_sender = MockBatchSender::with_result(Arc::new(
+            || Ok(Some(Error::new(ErrorKind::Other, "Test error")))));
+        let memory_storage = memory_storage();
+
+        let mut  batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            memory_storage.clone(),
+            batch_sender.clone());
+
+        batcher.failed_upload_timeout = Duration::from_millis(1);
+        batcher.retry_batch_upload = false;
+        assert!(batcher.start());
+
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+
+        thread::sleep(Duration::from_millis(20));
+
+        batcher.hard_stop().unwrap();
+
+        let batches_guard = batch_sender.batches.lock().unwrap();
+        assert_eq!(batches_guard.len(), 1);
+        validate_batch(&batches_guard[0], BATCH1);
+
+        validate_batches_queue0(&memory_storage);
+    }
+
+    #[test]
+    fn sender_exception() {
+        init();
+        let batch_sender = MockBatchSender::with_result(Arc::new(
+            || Err(Error::new(ErrorKind::Other, "Test error"))));
+        let memory_storage = memory_storage();
+
+        let mut  batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            memory_storage.clone(),
+            batch_sender.clone());
+
+        batcher.failed_upload_timeout = Duration::from_millis(1);
+        assert!(batcher.start());
+        batcher.put("test1").unwrap();
+        batcher.flush().unwrap();
+
+        thread::sleep(Duration::from_millis(5));
+
+        let result = batcher.put("test2");
+        assert!(result.is_err());
+
+        batcher.hard_stop().unwrap();
 
         validate_batches_queue1(&memory_storage);
     }
