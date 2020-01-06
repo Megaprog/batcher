@@ -157,22 +157,23 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
 
                 debug!("{} send time: {:?}", *batch, self.since(batch_upload_start));
 
-                if let Ok(None) = send_result {
+                let success = if let Ok(None) = send_result {
                     trace!("{} successfully uploaded", *batch);
                     uploaded_batch_counter += 1;
                     send_batches_bytes += batch.bytes.len();
 
                     self.try_remove(&batch);
-                    break;
-                }
+                    true
+                } else {
+                    warn!("Error while sending {}: {}", *batch, send_result.unwrap().unwrap());
 
-                warn!("Error while sending {}: {}", *batch, send_result.unwrap().unwrap());
+                    thread::sleep(self.failed_upload_timeout);
 
-                thread::sleep(self.failed_upload_timeout);
-
-                if !self.retry_batch_upload {
-                    self.try_remove(&batch);
-                }
+                    if !self.retry_batch_upload {
+                        self.try_remove(&batch);
+                    }
+                    false
+                };
 
                 let mutex_guard = self.shared_state.lock().unwrap();
                 if mutex_guard.stopped && self.should_interrupt(mutex_guard) {
@@ -180,7 +181,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                     break 'outer;
                 }
 
-                if !self.retry_batch_upload {
+                if success || !self.retry_batch_upload {
                     break;
                 }
 
@@ -708,7 +709,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(40));
+        thread::sleep(Duration::from_millis(30));
 
         batcher.hard_stop().unwrap();
 
