@@ -155,7 +155,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                     return;
                 }
 
-                debug!("{} send time: {:?}", *batch, self.since(batch_upload_start));
+                trace!("{} send time: {:?}", *batch, self.since(batch_upload_start));
 
                 let success = if let Ok(None) = send_result {
                     trace!("{} successfully uploaded", *batch);
@@ -420,7 +420,7 @@ mod test {
     impl BatchSender for NothingBatchSender {
         fn send_batch(&self, batch: &[u8]) -> Result<Option<Error>, Error> {
             loop {
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(1));
                 if self.0.load(Ordering::Relaxed) {
                     break;
                 }
@@ -709,7 +709,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(Duration::from_millis(5));
 
         batcher.hard_stop().unwrap();
 
@@ -741,7 +741,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(5));
 
         batcher.hard_stop().unwrap();
 
