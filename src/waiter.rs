@@ -1,8 +1,9 @@
-use std::sync::{MutexGuard, Condvar, Mutex, TryLockResult, TryLockError, PoisonError};
+use std::sync::{MutexGuard, Condvar, Mutex, TryLockResult, TryLockError, PoisonError, WaitTimeoutResult};
 use std::ops::{Deref, DerefMut};
 use std::{io, thread};
 use std::io::{Error, ErrorKind};
 use std::thread::ThreadId;
+use std::time::Duration;
 
 struct Interruption {
     waiting: i32,
@@ -84,12 +85,18 @@ impl<'a, T> Waiter<'a, T> {
 
     pub fn wait(&mut self) -> io::Result<()> {
         let condvar = self.condvar;
-        self.wait_inner(|mutex_guard| condvar.wait(mutex_guard).unwrap())
+        self.wait_inner(|mutex_guard| (condvar.wait(mutex_guard).unwrap(), ()))
     }
 
-    fn wait_inner<F: FnOnce(MutexGuard<'a, Interruptable<T>>) -> MutexGuard<'a, Interruptable<T>>>(&mut self, f: F) -> io::Result<()> {
+    pub fn wait_timeout(&mut self, dur: Duration) -> io::Result<WaitTimeoutResult> {
+        let condvar = self.condvar;
+        self.wait_inner(|mutex_guard| condvar.wait_timeout(mutex_guard, dur).unwrap())
+    }
+
+    fn wait_inner<V, F: FnOnce(MutexGuard<'a, Interruptable<T>>) -> (MutexGuard<'a, Interruptable<T>>, V)>(&mut self, f: F) -> io::Result<V> {
         self.mutex_guard.as_mut().unwrap().interruption.waiting += 1;
-        self.mutex_guard = Some(f(self.mutex_guard.take().unwrap()));
+        let (mutex_guard, value) = f(self.mutex_guard.take().unwrap());
+        self.mutex_guard = Some(mutex_guard);
         let guard = self.mutex_guard.as_mut().unwrap();
         guard.interruption.waiting -= 1;
 
@@ -101,7 +108,7 @@ impl<'a, T> Waiter<'a, T> {
                                           thread_id, thread_name)))
         }
 
-        Ok(())
+        Ok(value)
     }
 
     pub fn notify_one(&self) {
