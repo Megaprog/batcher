@@ -82,9 +82,14 @@ impl<'a, T> Waiter<'a, T> {
         }
     }
 
-    fn wait(&mut self) -> io::Result<()> {
+    pub fn wait(&mut self) -> io::Result<()> {
+        let condvar = self.condvar;
+        self.wait_inner(|mutex_guard| condvar.wait(mutex_guard).unwrap())
+    }
+
+    fn wait_inner<F: FnOnce(MutexGuard<'a, Interruptable<T>>) -> MutexGuard<'a, Interruptable<T>>>(&mut self, f: F) -> io::Result<()> {
         self.mutex_guard.as_mut().unwrap().interruption.waiting += 1;
-        self.mutex_guard = Some(self.condvar.wait(self.mutex_guard.take().unwrap()).unwrap());
+        self.mutex_guard = Some(f(self.mutex_guard.take().unwrap()));
         let guard = self.mutex_guard.as_mut().unwrap();
         guard.interruption.waiting -= 1;
 
@@ -99,7 +104,15 @@ impl<'a, T> Waiter<'a, T> {
         Ok(())
     }
 
-    fn interrupt(&mut self) {
+    pub fn notify_one(&self) {
+        self.condvar.notify_one()
+    }
+
+    pub fn notify_all(&self) {
+        self.condvar.notify_all()
+    }
+
+    pub fn interrupt(&mut self) {
         let guard = self.mutex_guard.as_mut().unwrap();
         guard.interruption.interrupted = guard.interruption.waiting;
         let thread = thread::current();

@@ -4,75 +4,24 @@ use std::io;
 use std::sync::{Mutex, Arc, Condvar, MutexGuard};
 use std::io::{Error, ErrorKind};
 use std::ops::{Deref, DerefMut};
+use crate::waiter::{Waiter, Lock};
 
 const DEFAULT_MAX_BYTES_IN_QUEUE: usize = 64 * 1024 * 1024;
-
-pub struct Interruption {
-    waiting: i32,
-    interrupted: i32,
-}
 
 pub struct MemoryStorageSharedState {
     pub(crate) batches_queue: VecDeque<Arc<BinaryBatch>>,
     occupied_bytes: usize,
     previous_batch_id: i64,
-    interruption: Interruption,
     stopped: bool,
 }
 
-pub struct MemoryStorageSync {
-    pub(crate) mutex: Mutex<MemoryStorageSharedState>,
-    condvar: Condvar,
-}
-
-pub struct MemoryStorageGuard<'a> {
-    mutex_guard: Option<MutexGuard<'a, MemoryStorageSharedState>>,
-    condvar: &'a Condvar,
-}
-
-impl<'a> MemoryStorageGuard<'a> {
-    fn from(storage_sync: &'a MemoryStorageSync) -> MemoryStorageGuard<'a> {
-        let MemoryStorageSync { mutex, condvar, ..} = storage_sync;
-        MemoryStorageGuard { mutex_guard: Some(mutex.lock().unwrap()), condvar}
-    }
-
-    fn wait(&mut self) -> io::Result<()> {
-        self.interruption.waiting += 1;
-        self.mutex_guard = Some(self.condvar.wait(self.mutex_guard.take().unwrap()).unwrap());
-        self.interruption.waiting -= 1;
-
-        if self.interruption.interrupted > 0 {
-            self.interruption.interrupted -= 1;
-            return Err(Error::new(ErrorKind::Interrupted, "Interrupted from another thread"))
-        }
-
-        Ok(())
-    }
-
-    fn interrupt(&mut self) {
-        self.interruption.interrupted = self.interruption.waiting;
-        self.condvar.notify_all();
-    }
-}
-
-impl<'a> Deref for MemoryStorageGuard<'a> {
-    type Target = MutexGuard<'a, MemoryStorageSharedState>;
-
-    fn deref(&self) -> &Self::Target {
-        self.mutex_guard.as_ref().unwrap()
-    }
-}
-
-impl<'a> DerefMut for MemoryStorageGuard<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.mutex_guard.as_mut().unwrap()
-    }
-}
-
 trait MemoryStorageThis {
-    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch, guard: &mut MemoryStorageGuard) -> io::Result<bool>;
-    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch, guard: MemoryStorageGuard) -> io::Result<()>;
-    fn notify_after_remove(&self, memory_storage: &NonBlockingMemoryStorage, condvar: &Condvar) {}
+    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch,
+                            waiter: &mut Waiter<MemoryStorageSharedState>) -> io::Result<bool>;
+    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch,
+                   waiter: Waiter<MemoryStorageSharedState>) -> io::Result<()>;
+    fn notify_after_remove(&self, memory_storage: &NonBlockingMemoryStorage,
+                           waiter: &Waiter<MemoryStorageSharedState>) {}
 }
 
 #[derive(Clone)]
@@ -80,7 +29,7 @@ pub struct NonBlockingMemoryStorage {
     pub max_bytes: usize,
     pub clock: fn() -> i64,
     this: Arc<dyn MemoryStorageThis + Send + Sync>,
-    pub(crate) shared_state: Arc<MemoryStorageSync>
+    pub(crate) shared_state: Arc<Lock<MemoryStorageSharedState>>
 }
 
 impl NonBlockingMemoryStorage {
@@ -94,16 +43,12 @@ impl NonBlockingMemoryStorage {
             max_bytes,
             clock: crate::batch_storage::time_from_epoch_millis,
             this: Arc::new(Base),
-            shared_state: Arc::new(MemoryStorageSync {
-                mutex: Mutex::new(MemoryStorageSharedState {
-                    batches_queue: VecDeque::new(),
-                    occupied_bytes: 0,
-                    previous_batch_id: 0,
-                    interruption: Interruption { waiting: 0, interrupted: 0 },
-                    stopped: false,
-                }),
-                condvar: Condvar::new(),
-            }),
+            shared_state: Arc::new(Lock::new(MemoryStorageSharedState {
+                batches_queue: VecDeque::new(),
+                occupied_bytes: 0,
+                previous_batch_id: 0,
+                stopped: false,
+            })),
         }
     }
 }
@@ -112,26 +57,28 @@ impl NonBlockingMemoryStorage {
 struct Base;
 
 impl MemoryStorageThis for Base {
-    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch, guard: &mut MemoryStorageGuard) -> io::Result<bool> {
-        Ok(guard.occupied_bytes + batch.bytes.len() > memory_storage.max_bytes)
+    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch,
+                            waiter: &mut Waiter<MemoryStorageSharedState>) -> io::Result<bool> {
+        Ok(waiter.occupied_bytes + batch.bytes.len() > memory_storage.max_bytes)
     }
 
-    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch, mut guard: MemoryStorageGuard) -> io::Result<()> {
-        if guard.stopped {
+    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch,
+                   mut waiter: Waiter<MemoryStorageSharedState>) -> io::Result<()> {
+        if waiter.stopped {
             return Err(Error::new(ErrorKind::Interrupted, "The storage has been stopped"))
         }
 
-        if memory_storage.this.is_capacity_exceeded(memory_storage, &batch, &mut guard)? {
+        if memory_storage.this.is_capacity_exceeded(memory_storage, &batch, &mut waiter)? {
             return Err(Error::new(ErrorKind::Other,
                                   format!("Storage capacity exceeded: needed {} bytes, remains {} of {}",
-                                          batch.bytes.len(), (memory_storage.max_bytes - guard.occupied_bytes), memory_storage.max_bytes)));
+                                          batch.bytes.len(), (memory_storage.max_bytes - waiter.occupied_bytes), memory_storage.max_bytes)));
         }
 
-        guard.previous_batch_id = batch.batch_id;
-        guard.occupied_bytes += batch.bytes.len();
-        guard.batches_queue.push_back(Arc::new(batch));
+        waiter.previous_batch_id = batch.batch_id;
+        waiter.occupied_bytes += batch.bytes.len();
+        waiter.batches_queue.push_back(Arc::new(batch));
 
-        guard.condvar.notify_one();
+        waiter.notify_one();
 
         return Ok(());
     }
@@ -139,7 +86,7 @@ impl MemoryStorageThis for Base {
 
 impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
     fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
-        let guard = MemoryStorageGuard::from(&self.shared_state);
+        let guard = self.shared_state.lock();
 
         let epoch = (self.clock)();
         let batch_id = if epoch > guard.previous_batch_id {
@@ -152,7 +99,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
     }
 
     fn get(&self) -> io::Result<Arc<BinaryBatch>> {
-        let mut guard = MemoryStorageGuard::from(&self.shared_state);
+        let mut guard = self.shared_state.lock();
         loop {
             if let Some(batch) = guard.batches_queue.front() {
                 return Ok(batch.clone());
@@ -162,13 +109,13 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
     }
 
     fn remove(&self) -> io::Result<()> {
-        let mut mutex_guard = self.shared_state.mutex.lock().unwrap();
-        let batch_opt = mutex_guard.batches_queue.pop_front();
+        let mut guard = self.shared_state.lock();
+        let batch_opt = guard.batches_queue.pop_front();
         if let Some(batch) = batch_opt {
-            mutex_guard.occupied_bytes -= batch.bytes.len();
+            guard.occupied_bytes -= batch.bytes.len();
         }
 
-        self.this.notify_after_remove(self, &self.shared_state.condvar);
+        self.this.notify_after_remove(self, &guard);
         Ok(())
     }
 
@@ -177,11 +124,11 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
     }
 
     fn is_empty(&self) -> bool {
-        self.shared_state.mutex.lock().unwrap().batches_queue.is_empty()
+        self.shared_state.lock().batches_queue.is_empty()
     }
 
     fn shutdown(self) {
-        let mut guard = MemoryStorageGuard::from(&self.shared_state);
+        let mut guard = self.shared_state.lock();
         guard.stopped = true;
         guard.interrupt();
     }
@@ -193,21 +140,24 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
 struct Blocking(Box<dyn MemoryStorageThis + Send + Sync>);
 
 impl MemoryStorageThis for Blocking {
-    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch, guard: &mut MemoryStorageGuard) -> io::Result<bool> {
+    fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch,
+                            waiter: &mut Waiter<MemoryStorageSharedState>) -> io::Result<bool> {
         loop {
-            if !self.0.is_capacity_exceeded(memory_storage, batch, guard)? {
+            if !self.0.is_capacity_exceeded(memory_storage, batch, waiter)? {
                 return Ok(false)
             }
-            guard.wait()?;
+            waiter.wait()?;
         }
     }
 
-    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch, guard: MemoryStorageGuard) -> Result<(), Error> {
-        self.0.store_batch(memory_storage, batch, guard)
+    fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch,
+                   waiter: Waiter<MemoryStorageSharedState>) -> Result<(), Error> {
+        self.0.store_batch(memory_storage, batch, waiter)
     }
 
-    fn notify_after_remove(&self, memory_storage: &NonBlockingMemoryStorage, condvar: &Condvar) {
-        condvar.notify_one();
+    fn notify_after_remove(&self, memory_storage: &NonBlockingMemoryStorage,
+                           waiter: &Waiter<MemoryStorageSharedState>) {
+        waiter.notify_one();
     }
 }
 
@@ -312,7 +262,7 @@ mod test_memory_storage {
 
         thread::sleep(Duration::from_millis(10));
 
-        assert_eq!(1, memory_storage.0.shared_state.mutex.lock().unwrap().batches_queue.len());
+        assert_eq!(1, memory_storage.0.shared_state.lock().batches_queue.len());
     }
 
     #[test]

@@ -811,7 +811,7 @@ mod test {
     }
 
     fn validate_batches_queue(memory_storage: &MemoryStorage, f: impl Fn(&VecDeque<Arc<BinaryBatch>>)) {
-        let mutex_guard = memory_storage.0.shared_state.mutex.lock().unwrap();
+        let mutex_guard = memory_storage.0.shared_state.lock();
         let batches = &mutex_guard.batches_queue;
         f(batches);
     }
