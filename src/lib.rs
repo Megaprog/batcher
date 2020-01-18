@@ -4,6 +4,7 @@ use miniz_oxide::deflate::{compress_to_vec, CompressionLevel};
 use std::io::Read;
 
 mod http_client;
+mod waiter;
 mod batch_storage;
 mod memory_storage;
 mod file_storage;
