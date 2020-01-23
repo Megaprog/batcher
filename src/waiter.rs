@@ -153,3 +153,78 @@ impl<'a, T> AsMut<T> for Waiter<'a, T> {
         DerefMut::deref_mut(self)
     }
 }
+
+
+#[cfg(test)]
+mod test {
+    use std::sync::{Mutex, Arc, TryLockError};
+    use crate::waiter::Lock;
+    use std::thread;
+    use std::time::{Duration, SystemTime, Instant};
+
+    #[derive(Eq, PartialEq, Debug)]
+    struct NonCopy(i32);
+
+    #[test]
+    fn unlock() {
+        let lock = Lock::new(());
+        drop(lock.lock());
+        drop(lock.lock());
+    }
+
+    #[test]
+    fn lock() {
+        let lock = Arc::new(Lock::new(()));
+        let waiter = lock.lock();
+
+        let moved_lock = lock.clone();
+        let join_handle = thread::spawn(move|| {
+            let start = Instant::now();
+            moved_lock.lock();
+            Instant::now().duration_since(start)
+        });
+
+        thread::sleep(Duration::from_millis(6));
+        drop(waiter);
+
+        let duration = join_handle.join().unwrap();
+        assert!(duration >= Duration::from_millis(5));
+    }
+
+    #[test]
+    fn try_lock() {
+        let lock = Arc::new(Lock::new(()));
+        let waiter = lock.lock();
+
+        let moved_lock = lock.clone();
+        let join_handle = thread::spawn(move|| {
+            let result = moved_lock.try_lock();
+            assert!(result.is_err());
+            match result.err().unwrap() {
+                TryLockError::Poisoned(p) => panic!("Poisoned {}", p),
+                TryLockError::WouldBlock => true
+            }
+        });
+
+        assert!(join_handle.join().unwrap());
+    }
+
+    #[test]
+    fn test_into_inner() {
+        let lock = Lock::new(NonCopy(10));
+        assert_eq!(lock.into_inner(), NonCopy(10));
+    }
+
+
+    #[test]
+    fn is_poisoned() {
+        let lock = Arc::new(Lock::new(NonCopy(10)));
+        let cloned_lock = lock.clone();
+        thread::spawn(move || {
+            let w = cloned_lock.lock();
+            panic!("test panic in inner thread to poison mutex");
+        }).join();
+
+        assert!(lock.is_poisoned());
+    }
+}
