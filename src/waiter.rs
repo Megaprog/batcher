@@ -1,21 +1,24 @@
-use std::sync::{MutexGuard, Condvar, Mutex, TryLockResult, TryLockError, PoisonError, WaitTimeoutResult};
+use std::sync::{MutexGuard, Condvar, Mutex, TryLockResult, TryLockError, PoisonError, WaitTimeoutResult, LockResult};
 use std::ops::{Deref, DerefMut};
 use std::{io, thread};
 use std::io::{Error, ErrorKind};
 use std::thread::ThreadId;
 use std::time::Duration;
 
+#[derive(Debug)]
 struct Interruption {
     waiting: i32,
     interrupted: i32,
     thread: Option<(ThreadId, Option<String>)>,
 }
 
+#[derive(Debug)]
 struct Interruptable<T> {
     value: T,
     interruption: Interruption,
 }
 
+#[derive(Debug)]
 pub struct Lock<T> {
     mutex: Mutex<Interruptable<T>>,
     condvar: Condvar,
@@ -47,6 +50,12 @@ impl<T> Lock<T> {
         Waiter::new(self.mutex.lock().unwrap(), &self.condvar)
     }
 
+    pub fn lock_safe(&self) -> LockResult<Waiter<'_, T>> {
+        self.mutex.lock()
+            .map(|mutex_guard| Waiter::new(mutex_guard, &self.condvar))
+            .map_err(|poison|PoisonError::new(Waiter::new(poison.into_inner(), &self.condvar)))
+    }
+
     pub fn try_lock(&self) -> TryLockResult<Waiter<'_, T>> {
         self.mutex.try_lock()
             .map(|mutex_guard| Waiter::new(mutex_guard, &self.condvar))
@@ -61,12 +70,16 @@ impl<T> Lock<T> {
         self.mutex.is_poisoned()
     }
 
-    pub fn into_inner(self) -> T where T: Sized {
-        self.mutex.into_inner().unwrap().value
+    pub fn into_inner(self) -> LockResult<T> where T: Sized {
+        self.mutex.into_inner()
+            .map(|interruptable| interruptable.value)
+            .map_err(|poison|PoisonError::new(poison.into_inner().value))
     }
 
-    pub fn get_mut(&mut self) -> &mut T {
-        &mut self.mutex.get_mut().unwrap().value
+    pub fn get_mut(&mut self) -> LockResult<&mut T> {
+        self.mutex.get_mut()
+            .map(|interruptable| &mut interruptable.value)
+            .map_err(|poison|PoisonError::new(&mut poison.into_inner().value))
     }
 }
 
@@ -212,7 +225,7 @@ mod test {
     #[test]
     fn test_into_inner() {
         let lock = Lock::new(NonCopy(10));
-        assert_eq!(lock.into_inner(), NonCopy(10));
+        assert_eq!(lock.into_inner().unwrap(), NonCopy(10));
     }
 
 
@@ -226,5 +239,33 @@ mod test {
         }).join();
 
         assert!(lock.is_poisoned());
+        match Arc::try_unwrap(lock).unwrap().into_inner() {
+            Err(e) => assert_eq!(e.into_inner(), NonCopy(10)),
+            Ok(x) => panic!("into_inner of poisoned Mutex is Ok: {:?}", x),
+        }
+    }
+
+
+    #[test]
+    fn test_get_mut() {
+        let mut lock = Lock::new(NonCopy(10));
+        *lock.get_mut().unwrap() = NonCopy(20);
+        assert_eq!(lock.into_inner().unwrap(), NonCopy(20));
+    }
+
+    #[test]
+    fn test_get_mut_poison() {
+        let lock = Arc::new(Lock::new(NonCopy(10)));
+        let cloned_lock = lock.clone();
+        thread::spawn(move || {
+            let _lock = cloned_lock.lock();
+            panic!("test panic in inner thread to poison mutex");
+        }).join();
+
+        assert!(lock.is_poisoned());
+        match Arc::try_unwrap(lock).unwrap().get_mut() {
+            Err(e) => assert_eq!(*e.into_inner(), NonCopy(10)),
+            Ok(x) => panic!("get_mut of poisoned Mutex is Ok: {:?}", x),
+        }
     }
 }

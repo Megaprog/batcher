@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
 use std::io;
-use std::sync::{Mutex, Arc, Condvar, MutexGuard};
+use std::sync::Arc;
 use std::io::{Error, ErrorKind};
 use std::ops::{Deref, DerefMut};
 use crate::waiter::{Waiter, Lock};
