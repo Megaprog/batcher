@@ -305,4 +305,35 @@ mod test {
         assert!(arc.lock_safe().is_err());
         assert!(arc.is_poisoned());
     }
+
+    #[test]
+    fn notify_one() {
+        let lock = Arc::new(Lock::new(()));
+        let cloned_lock = lock.clone();
+
+        let mut w = lock.lock();
+        let _t = thread::spawn(move|| {
+            let n = cloned_lock.lock();
+            n.notify_one();
+        });
+        w.wait();
+        drop(w);
+    }
+
+    #[test]
+    fn wait_timeout_wait() {
+        let lock = Arc::new(Lock::new(()));
+
+        loop {
+            let mut w = lock.lock();
+            let no_timeout = w.wait_timeout(Duration::from_millis(1)).unwrap();
+            // spurious wakeups mean this isn't necessarily true
+            // so execute test again, if not timeout
+            if !no_timeout.timed_out() {
+                continue;
+            }
+
+            break;
+        }
+    }
 }
