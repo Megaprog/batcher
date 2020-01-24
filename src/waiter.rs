@@ -123,8 +123,14 @@ impl<'a, T> Waiter<'a, T> {
         where F: FnOnce(MutexGuard<'a, Interruptable<T>>) -> LockResult<(MutexGuard<'a, Interruptable<T>>, V)>
     {
         self.mutex_guard.as_mut().unwrap().interruption.waiting += 1;
-        let (mutex_guard, value) = f(self.mutex_guard.take().unwrap())
-            .map_err(|p| PoisonError::new(Ok(p.into_inner().1)))?;
+        let wait_result = f(self.mutex_guard.take().unwrap());
+        if let Err(p) = wait_result {
+            let (mutex_guard, value ) = p.into_inner();
+            self.mutex_guard = Some(mutex_guard);
+            return Err(PoisonError::new(Ok(value)))
+        }
+
+        let (mutex_guard, value) = wait_result.unwrap();
         self.mutex_guard = Some(mutex_guard);
         let guard = self.mutex_guard.as_mut().unwrap();
         guard.interruption.waiting -= 1;
@@ -186,7 +192,7 @@ impl<'a, T> AsMut<T> for Waiter<'a, T> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{Mutex, Arc, TryLockError};
+    use std::sync::{Mutex, Arc, TryLockError, LockResult};
     use crate::waiter::Lock;
     use std::thread;
     use std::time::{Duration, SystemTime, Instant};
@@ -283,5 +289,20 @@ mod test {
             Err(e) => assert_eq!(*e.into_inner(), NonCopy(10)),
             Ok(x) => panic!("get_mut of poisoned Mutex is Ok: {:?}", x),
         }
+    }
+
+    #[test]
+    fn arc_poison() {
+        let arc = Arc::new(Lock::new(1));
+        assert!(!arc.is_poisoned());
+
+        let cloned_arc = arc.clone();
+        thread::spawn(move|| {
+            let lock = cloned_arc.lock();
+            assert_eq!(*lock, 2);
+        }).join();
+
+        assert!(arc.lock_safe().is_err());
+        assert!(arc.is_poisoned());
     }
 }
