@@ -4,6 +4,7 @@ use std::{io, thread};
 use std::io::{Error, ErrorKind};
 use std::thread::ThreadId;
 use std::time::Duration;
+use std::env::set_current_dir;
 
 #[derive(Debug)]
 struct Interruption {
@@ -53,7 +54,7 @@ impl<T> Lock<T> {
     pub fn lock_safe(&self) -> LockResult<Waiter<'_, T>> {
         self.mutex.lock()
             .map(|mutex_guard| Waiter::new(mutex_guard, &self.condvar))
-            .map_err(|poison|PoisonError::new(Waiter::new(poison.into_inner(), &self.condvar)))
+            .map_err(|p|PoisonError::new(Waiter::new(p.into_inner(), &self.condvar)))
     }
 
     pub fn try_lock(&self) -> TryLockResult<Waiter<'_, T>> {
@@ -73,13 +74,13 @@ impl<T> Lock<T> {
     pub fn into_inner(self) -> LockResult<T> where T: Sized {
         self.mutex.into_inner()
             .map(|interruptable| interruptable.value)
-            .map_err(|poison|PoisonError::new(poison.into_inner().value))
+            .map_err(|p|PoisonError::new(p.into_inner().value))
     }
 
     pub fn get_mut(&mut self) -> LockResult<&mut T> {
         self.mutex.get_mut()
             .map(|interruptable| &mut interruptable.value)
-            .map_err(|poison|PoisonError::new(&mut poison.into_inner().value))
+            .map_err(|p|PoisonError::new(&mut p.into_inner().value))
     }
 }
 
@@ -98,17 +99,32 @@ impl<'a, T> Waiter<'a, T> {
 
     pub fn wait(&mut self) -> io::Result<()> {
         let condvar = self.condvar;
-        self.wait_inner(|mutex_guard| (condvar.wait(mutex_guard).unwrap(), ()))
+        self.wait_safe().unwrap()
+    }
+
+    pub fn wait_safe(&mut self) -> LockResult<io::Result<()>> {
+        let condvar = self.condvar;
+        self.wait_inner(|mutex_guard| condvar.wait(mutex_guard)
+            .map(|r|(r, ()))
+            .map_err(|p|PoisonError::new((p.into_inner(), ()))))
     }
 
     pub fn wait_timeout(&mut self, dur: Duration) -> io::Result<WaitTimeoutResult> {
         let condvar = self.condvar;
-        self.wait_inner(|mutex_guard| condvar.wait_timeout(mutex_guard, dur).unwrap())
+        self.wait_timeout_safe(dur).unwrap()
     }
 
-    fn wait_inner<V, F: FnOnce(MutexGuard<'a, Interruptable<T>>) -> (MutexGuard<'a, Interruptable<T>>, V)>(&mut self, f: F) -> io::Result<V> {
+    pub fn wait_timeout_safe(&mut self, dur: Duration) -> LockResult<io::Result<WaitTimeoutResult>> {
+        let condvar = self.condvar;
+        self.wait_inner(|mutex_guard| condvar.wait_timeout(mutex_guard, dur))
+    }
+
+    fn wait_inner<V, F>(&mut self, f: F) -> LockResult<io::Result<V>>
+        where F: FnOnce(MutexGuard<'a, Interruptable<T>>) -> LockResult<(MutexGuard<'a, Interruptable<T>>, V)>
+    {
         self.mutex_guard.as_mut().unwrap().interruption.waiting += 1;
-        let (mutex_guard, value) = f(self.mutex_guard.take().unwrap());
+        let (mutex_guard, value) = f(self.mutex_guard.take().unwrap())
+            .map_err(|p| PoisonError::new(Ok(p.into_inner().1)))?;
         self.mutex_guard = Some(mutex_guard);
         let guard = self.mutex_guard.as_mut().unwrap();
         guard.interruption.waiting -= 1;
@@ -116,12 +132,12 @@ impl<'a, T> Waiter<'a, T> {
         if guard.interruption.interrupted > 0 {
             guard.interruption.interrupted -= 1;
             let (thread_id, thread_name) = guard.interruption.thread.as_ref().unwrap();
-            return Err(Error::new(ErrorKind::Interrupted,
+            return Ok(Err(Error::new(ErrorKind::Interrupted,
                                   format!("Interrupted from another Thread {{ id: {:?}, name: {:?} }}",
-                                          thread_id, thread_name)))
+                                          thread_id, thread_name))))
         }
 
-        Ok(value)
+        Ok(Ok(value))
     }
 
     pub fn notify_one(&self) {
