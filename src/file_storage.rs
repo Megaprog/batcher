@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::{io, fs};
 use log::*;
-use std::ops::{Deref, Try};
+use std::ops::Deref;
 use std::io::{Error, ErrorKind};
 
 macro_rules! batch_file {
@@ -19,11 +19,11 @@ static BATCH_FILE_GLOB_PATTERN: &str = concat!(batch_file!(), "*");
 static DIGITAL_FORMAT: &str = "{:011}";
 static LAST_BATCH_ID_FILE_NAME: &str = "lastBatchId";
 
-const DEFAULT_MAX_BYTES_IN_FILES: usize = std::usize::MAX;
+const DEFAULT_MAX_BYTES_IN_FILES: u128 = std::u128::MAX;
 
 pub struct FileStorageSharedState {
     pub(crate) file_ids: VecDeque<i64>,
-    occupied_bytes: usize,
+    occupied_bytes: u128,
     last_batch_id: i64,
     stopped: bool,
 }
@@ -32,7 +32,7 @@ pub struct FileStorageSharedState {
 pub struct FileStorage {
     path: PathBuf,
     batch_id_file: PathBuf,
-    pub max_bytes: usize,
+    pub max_bytes: u128,
     pub(crate) shared_state: Arc<Lock<FileStorageSharedState>>
 }
 
@@ -41,9 +41,9 @@ impl FileStorage {
         FileStorage::init_with_max_bytes(path, DEFAULT_MAX_BYTES_IN_FILES)
     }
 
-    pub fn init_with_max_bytes(path: impl Into<PathBuf>, max_bytes: usize) -> io::Result<FileStorage> {
+    pub fn init_with_max_bytes(path: impl Into<PathBuf>, max_bytes: u128) -> io::Result<FileStorage> {
         let path = path.into();
-        fs::create_dir_all(path)?;
+        fs::create_dir_all(&path)?;
         if !path.is_dir() {
             return Err(Error::new(ErrorKind::NotFound, format!("The path {:?} is not a directory", path)))
         }
