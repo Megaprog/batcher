@@ -255,7 +255,7 @@ mod test {
     fn is_poisoned() {
         let lock = Arc::new(Lock::new(NonCopy(10)));
         let cloned_lock = lock.clone();
-        thread::spawn(move || {
+        let _ = thread::spawn(move || {
             let w = cloned_lock.lock();
             panic!("test panic in inner thread to poison mutex");
         }).join();
@@ -279,7 +279,7 @@ mod test {
     fn test_get_mut_poison() {
         let lock = Arc::new(Lock::new(NonCopy(10)));
         let cloned_lock = lock.clone();
-        thread::spawn(move || {
+        let _ = thread::spawn(move || {
             let _lock = cloned_lock.lock();
             panic!("test panic in inner thread to poison mutex");
         }).join();
@@ -297,7 +297,7 @@ mod test {
         assert!(!arc.is_poisoned());
 
         let cloned_arc = arc.clone();
-        thread::spawn(move|| {
+        let _ = thread::spawn(move|| {
             let lock = cloned_arc.lock();
             assert_eq!(*lock, 2);
         }).join();
@@ -316,7 +316,7 @@ mod test {
             let n = cloned_lock.lock();
             n.notify_one();
         });
-        w.wait();
+        assert!(w.wait().is_ok());
         drop(w);
     }
 

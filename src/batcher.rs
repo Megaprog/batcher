@@ -118,7 +118,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 
     fn upload(self) {
-        trace!("Upload starting...");
+        info!("Upload starting...");
 
         let mut uploaded_batch_counter = 0;
         let mut all_batch_counter = 0;
@@ -150,12 +150,12 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                 let send_result = self.batch_sender.send_batch(&batch.bytes);
                 if let Err(e) = send_result {
                     error!("Unexpected exception while sending the {}: {}", *batch, e);
-                    self.shared_state.lock().unwrap() .last_upload_result = Arc::new(Err(e));
+                    self.shared_state.lock().unwrap().last_upload_result = Arc::new(Err(e));
                     self.stop().unwrap();
                     return;
                 }
 
-                trace!("{} send time: {:?}", *batch, self.since(batch_upload_start));
+                trace!("{} sending time: {:?}", *batch, self.since(batch_upload_start));
 
                 let success = if let Ok(None) = send_result {
                     trace!("{} successfully uploaded", *batch);
@@ -185,7 +185,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                     break;
                 }
 
-                info!("Retrying the {}", *batch);
+                debug!("Retrying the {}", *batch);
             }
         }
 
@@ -207,6 +207,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 
     fn stop_inner(self, hard: bool, soft: bool) -> io::Result<()> {
+        info!("Stop with hard: {} or soft: {}", hard, soft);
         {
             let mut mutex_guard = self.shared_state.lock().unwrap();
             if mutex_guard.stopped {
@@ -259,12 +260,11 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
                                            self.builder_factory.create_builder());
         let len = records_builder.len();
         let size = records_builder.size();
-        trace!("Flushing {} bytes in {} records", size, len);
-
         if len == 0 {
-            debug!("Nothing to flush");
+            debug!("Flushing nothing");
             return Ok(());
         }
+        trace!("Flushing {} bytes in {} records", size, len);
 
         let result = self.batch_storage.store(records_builder.build(), &self.batch_factory);
         if result.is_ok() {
@@ -380,6 +380,7 @@ mod test {
     use miniz_oxide::inflate::decompress_to_vec;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::collections::VecDeque;
+    use log::*;
 
     #[derive(Clone)]
     struct MockBatchSender {
@@ -458,7 +459,9 @@ mod test {
 
     fn init() {
         INIT.call_once(|| {
-            Builder::from_env(Env::default().default_filter_or("trace")).is_test(true).init();
+            Builder::from_env(Env::default().default_filter_or("trace")).is_test(true)
+                .format_timestamp_millis()
+                .init();
         });
     }
 
@@ -694,7 +697,7 @@ mod test {
             || Ok(Some(Error::new(ErrorKind::Other, "Test error")))));
         let memory_storage = memory_storage();
 
-        let mut  batcher = BatcherImpl::new(
+        let mut batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
             memory_storage.clone(),
@@ -706,7 +709,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(20));
 
         batcher.hard_stop().unwrap();
 
@@ -756,18 +759,17 @@ mod test {
             || Err(Error::new(ErrorKind::Other, "Test error"))));
         let memory_storage = memory_storage();
 
-        let mut  batcher = BatcherImpl::new(
+        let batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
             memory_storage.clone(),
             batch_sender.clone());
 
-        batcher.failed_upload_timeout = Duration::from_millis(1);
         assert!(batcher.start());
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(20));
 
         let result = batcher.put("test2");
         assert!(result.is_err());

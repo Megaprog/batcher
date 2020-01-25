@@ -3,7 +3,6 @@ use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
 use std::io;
 use std::sync::Arc;
 use std::io::{Error, ErrorKind};
-use std::ops::{Deref, DerefMut};
 use crate::waiter::{Waiter, Lock};
 
 const DEFAULT_MAX_BYTES_IN_QUEUE: usize = 64 * 1024 * 1024;
@@ -322,7 +321,7 @@ mod test {
         let cloned_storage = memory_storage.clone();
         let consumer_thread = thread::spawn(move || {
             let get_result = cloned_storage.get();
-            cloned_storage.remove();
+            cloned_storage.remove().unwrap();
             get_result
         });
 
@@ -346,7 +345,7 @@ mod test {
                 assert_eq!(1, batch.batch_id);
                 assert_eq!(vec![1, 2], batch.bytes);
             }
-            cloned_storage.remove();
+            cloned_storage.remove().unwrap();
         })
     }
 }
