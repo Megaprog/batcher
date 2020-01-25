@@ -4,8 +4,10 @@ use crate::batch_storage::BinaryBatch;
 use crate::waiter::Lock;
 use std::path::{Path, PathBuf};
 use std::fs::File;
-use std::io;
+use std::{io, fs};
 use log::*;
+use std::ops::{Deref, Try};
+use std::io::{Error, ErrorKind};
 
 macro_rules! batch_file {
     () => ( "batchFile" )
@@ -40,14 +42,12 @@ impl FileStorage {
     }
 
     pub fn init_with_max_bytes(path: impl Into<PathBuf>, max_bytes: usize) -> io::Result<FileStorage> {
-//        File::open()
-//        if (Files.notExists(path)) {
-//            Files.createDirectories(path);
-//        }
-//        if (!Files.isDirectory(path)) {
-//            path = path.getParent();
-//        }
-//
+        let path = path.into();
+        fs::create_dir_all(path)?;
+        if !path.is_dir() {
+            return Err(Error::new(ErrorKind::NotFound, format!("The path {:?} is not a directory", path)))
+        }
+
 //        batchIdFile = path.toAbsolutePath().resolve(LAST_BATCH_ID_FILE_NAME);
 //
 //        final List<Long> ids = new ArrayList<>();
