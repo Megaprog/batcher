@@ -32,12 +32,11 @@ pub struct NonBlockingMemoryStorage {
 }
 
 impl NonBlockingMemoryStorage {
-
     pub fn new() -> NonBlockingMemoryStorage {
-        NonBlockingMemoryStorage::with_max_batch_bytes(DEFAULT_MAX_BYTES_IN_QUEUE)
+        NonBlockingMemoryStorage::with_max_bytes(DEFAULT_MAX_BYTES_IN_QUEUE)
     }
 
-    pub fn with_max_batch_bytes(max_bytes: usize) -> NonBlockingMemoryStorage {
+    pub fn with_max_bytes(max_bytes: usize) -> NonBlockingMemoryStorage {
         NonBlockingMemoryStorage {
             max_bytes,
             clock: crate::batch_storage::time_from_epoch_millis,
@@ -64,7 +63,7 @@ impl MemoryStorageThis for Base {
     fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch,
                    mut waiter: Waiter<MemoryStorageSharedState>) -> io::Result<()> {
         if waiter.stopped {
-            return Err(Error::new(ErrorKind::Interrupted, "The storage has been stopped"))
+            return Err(Error::new(ErrorKind::Interrupted, "The storage has been shut down"))
         }
 
         if memory_storage.this.is_capacity_exceeded(memory_storage, &batch, &mut waiter)? {
@@ -169,7 +168,7 @@ impl MemoryStorage {
     }
 
     pub fn with_max_batch_bytes(max_bytes: usize) -> MemoryStorage {
-        let mut non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_batch_bytes(max_bytes);
+        let mut non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_bytes(max_bytes);
         non_blocking_memory_storage.this = Arc::new(Blocking(Box::new(Base)));
         MemoryStorage(non_blocking_memory_storage)
     }
@@ -212,7 +211,7 @@ mod test_non_blocking_memory_storage {
 
     #[test]
     fn drop_if_out_of_capacity() {
-        let non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_batch_bytes(0);
+        let non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_bytes(0);
         let result = non_blocking_memory_storage.store("Test".to_string(), &BATCH_FACTORY);
 
         assert!(result.unwrap_err().to_string().starts_with("Storage capacity exceeded"));

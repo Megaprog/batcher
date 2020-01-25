@@ -238,7 +238,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         if mutex_guard.stopped {
             return Err(Error::new(ErrorKind::Interrupted,
                                   ChainedError::monad(
-                                      "The batcher has been stopped",
+                                      "The batcher has been shutdown",
                                       Box::new(mutex_guard.last_upload_result.clone()),
                                       Box::new(|any|
                                           any.downcast_ref::<Arc<io::Result<()>>>()
@@ -562,7 +562,7 @@ mod test {
     fn store_discarded() {
         init();
         let batch_sender = NothingBatchSender::new();
-        let memory_storage = NonBlockingMemoryStorage::with_max_batch_bytes(0);
+        let memory_storage = NonBlockingMemoryStorage::with_max_bytes(0);
 
         let mut batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
@@ -728,7 +728,7 @@ mod test {
             || Ok(Some(Error::new(ErrorKind::Other, "Test error")))));
         let memory_storage = memory_storage();
 
-        let mut  batcher = BatcherImpl::new(
+        let mut batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
             memory_storage.clone(),
