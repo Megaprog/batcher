@@ -8,6 +8,8 @@ use std::{io, fs};
 use log::*;
 use std::ops::Deref;
 use std::io::{Error, ErrorKind};
+use std::str::FromStr;
+use std::ffi::OsStr;
 
 macro_rules! batch_file {
     () => ( "batchFile" )
@@ -15,7 +17,6 @@ macro_rules! batch_file {
 
 static BATCH_FILE: &str = batch_file!();
 static BATCH_FILE_NAME_PREFIX: &str = concat!(batch_file!(), "-");
-static BATCH_FILE_GLOB_PATTERN: &str = concat!(batch_file!(), "*");
 static DIGITAL_FORMAT: &str = "{:011}";
 static LAST_BATCH_ID_FILE_NAME: &str = "lastBatchId";
 
@@ -48,8 +49,20 @@ impl FileStorage {
             return Err(Error::new(ErrorKind::NotFound, format!("The path {:?} is not a directory", path)))
         }
 
-//        batchIdFile = path.toAbsolutePath().resolve(LAST_BATCH_ID_FILE_NAME);
-//
+        let batch_id_file = path.join(LAST_BATCH_ID_FILE_NAME);
+
+        let mut entries = fs::read_dir(&path)?
+            .filter(|dir_entry_res| dir_entry_res.is_err() ||
+                dir_entry_res.as_ref().unwrap().path().is_file())
+            .map(|dir_entry_res| dir_entry_res
+                .map(|dir_entry| dir_entry.file_name())
+                .map(|file_name| file_name.to_string_lossy().into_owned()))
+            .filter(|file_name_res| file_name_res.is_err()
+                || file_name_res.as_ref().unwrap().starts_with(BATCH_FILE_NAME_PREFIX))
+            .map(|res| res.and_then(|file_name|FileStorage::batch_id(&file_name)))
+            .collect::<Result<Vec<_>, io::Error>>()?;
+
+
 //        final List<Long> ids = new ArrayList<>();
 //        try (final DirectoryStream<Path> directoryStream = Files.newDirectoryStream(path, BATCH_FILE_GLOB_PATTERN)) {
 //            for (Path file : directoryStream) {
@@ -75,8 +88,8 @@ impl FileStorage {
 //        log.debug("Initialized {} batches.", ids.size());
 
         Ok(FileStorage {
-            path: path.into(),
-            batch_id_file: PathBuf::new(),
+            path,
+            batch_id_file,
             max_bytes,
             shared_state: Arc::new(Lock::new(FileStorageSharedState {
                 file_ids: VecDeque::new(),
@@ -85,6 +98,12 @@ impl FileStorage {
                 stopped: false,
             })),
         })
+    }
+
+    fn batch_id(batch_file_name: &str) -> io::Result<i64> {
+        batch_file_name[..BATCH_FILE_NAME_PREFIX.len()].parse::<i64>()
+            .map_err(|parse_int_error|
+                Error::new(ErrorKind::InvalidData, format!("Can't parse file name '{}' got {}", batch_file_name, parse_int_error)))
     }
 }
 
