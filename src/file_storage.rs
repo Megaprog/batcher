@@ -51,26 +51,19 @@ impl FileStorage {
 
         let batch_id_file = path.join(LAST_BATCH_ID_FILE_NAME);
 
-        let mut entries = fs::read_dir(&path)?
-            .filter(|dir_entry_res| dir_entry_res.is_err() ||
-                dir_entry_res.as_ref().unwrap().path().is_file())
+        let mut file_ids = fs::read_dir(&path)?
+            .filter(|dir_entry_res| dir_entry_res.as_ref()
+                .map(|dir_entry| dir_entry.path().is_file()).unwrap_or(true) )
             .map(|dir_entry_res| dir_entry_res
                 .map(|dir_entry| dir_entry.file_name())
                 .map(|file_name| file_name.to_string_lossy().into_owned()))
-            .filter(|file_name_res| file_name_res.is_err()
-                || file_name_res.as_ref().unwrap().starts_with(BATCH_FILE_NAME_PREFIX))
-            .map(|res| res.and_then(|file_name|FileStorage::batch_id(&file_name)))
+            .filter(|file_name_res| file_name_res.as_ref()
+                .map(|file_name| file_name.starts_with(BATCH_FILE_NAME_PREFIX)).unwrap_or(true))
+            .map(|res| res.and_then(|file_name| FileStorage::batch_id(&file_name)))
             .collect::<Result<Vec<_>, io::Error>>()?;
 
+         file_ids.sort();
 
-//        final List<Long> ids = new ArrayList<>();
-//        try (final DirectoryStream<Path> directoryStream = Files.newDirectoryStream(path, BATCH_FILE_GLOB_PATTERN)) {
-//            for (Path file : directoryStream) {
-//                ids.add(batchId(file.getFileName().toString()));
-//            }
-//        }
-//        Collections.sort(ids);
-//
 //        final long batchIdFileLength = Files.exists(batchIdFile) ? Files.size(batchIdFile) : 0;
 //
 //        if (batchIdFileLength > 0) {
