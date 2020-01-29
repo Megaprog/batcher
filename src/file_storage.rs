@@ -70,8 +70,10 @@ impl FileStorage {
                 .map(|file_name| file_name.to_string_lossy().into_owned()))
             .filter(|file_name_res| file_name_res.as_ref()
                 .map(|file_name| file_name.starts_with(BATCH_FILE_NAME_PREFIX)).unwrap_or(true))
-            .map(|file_name_res| file_name_res.and_then(|file_name| fs::metadata(&file_name).map(|meta| (file_name, meta.len()))))
-            .map(|result| result.and_then(|name_meta| FileStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
+            .map(|file_name_res| file_name_res
+                .and_then(|file_name| fs::metadata(&file_name).map(|meta| (file_name, meta.len()))))
+            .map(|result| result
+                .and_then(|name_meta| FileStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
             .collect::<Result<Vec<_>, io::Error>>()?;
 
         debug!("Initialized {} batches.", ids_and_sizes.len());
