@@ -7,7 +7,7 @@ use std::fs::File;
 use std::{io, fs};
 use log::*;
 use std::ops::Deref;
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, BufRead};
 use std::str::FromStr;
 use std::ffi::OsStr;
 
@@ -49,8 +49,6 @@ impl FileStorage {
             return Err(Error::new(ErrorKind::NotFound, format!("The path {:?} is not a directory", path)))
         }
 
-        let batch_id_file = path.join(LAST_BATCH_ID_FILE_NAME);
-
         let mut file_ids = fs::read_dir(&path)?
             .filter(|dir_entry_res| dir_entry_res.as_ref()
                 .map(|dir_entry| dir_entry.path().is_file()).unwrap_or(true) )
@@ -62,32 +60,30 @@ impl FileStorage {
             .map(|res| res.and_then(|file_name| FileStorage::batch_id(&file_name)))
             .collect::<Result<Vec<_>, io::Error>>()?;
 
-         file_ids.sort();
+        file_ids.sort();
 
-//        final long batchIdFileLength = Files.exists(batchIdFile) ? Files.size(batchIdFile) : 0;
-//
-//        if (batchIdFileLength > 0) {
-//            final List<String> lines = Files.readAllLines(batchIdFile, StandardCharsets.UTF_8);
-//            lastBatchId = Integer.parseInt(lines.get(0));
-//        } else if (ids.size() > 0) {
-//            lastBatchId = ids.get(ids.size() - 1);
-//        } else {
-//            lastBatchId = 0;
-//        }
-//
-//        log.debug("Init lastBatchId with {}", lastBatchId);
-//
-//        fileIds = new ArrayDeque<>(ids);
-//        log.debug("Initialized {} batches.", ids.size());
+        let batch_id_file = path.join(LAST_BATCH_ID_FILE_NAME);
+
+        let last_batch_id = {
+            let file = fs::OpenOptions::new().read(true).create(true).open(&batch_id_file)?;
+            let mut lines = io::BufReader::new(file).lines();
+            lines.next().map(|result| result.and_then(|s| s.parse::<i64>()
+                .map_err(|e| Error::new(ErrorKind::InvalidData,
+                                        format!("Can't parse last batch id value '{}' from file {}", s, e)))))
+                .unwrap_or(Ok(0))?
+        };
+
+        debug!("Init lastBatchId with {}", last_batch_id);
+        debug!("Initialized {} batches.", file_ids.len());
 
         Ok(FileStorage {
             path,
             batch_id_file,
             max_bytes,
             shared_state: Arc::new(Lock::new(FileStorageSharedState {
-                file_ids: VecDeque::new(),
+                file_ids: file_ids.into(),
                 occupied_bytes: 0,
-                last_batch_id: 0,
+                last_batch_id,
                 stopped: false,
             })),
         })
@@ -95,8 +91,8 @@ impl FileStorage {
 
     fn batch_id(batch_file_name: &str) -> io::Result<i64> {
         batch_file_name[..BATCH_FILE_NAME_PREFIX.len()].parse::<i64>()
-            .map_err(|parse_int_error|
-                Error::new(ErrorKind::InvalidData, format!("Can't parse file name '{}' got {}", batch_file_name, parse_int_error)))
+            .map_err(|e|
+                Error::new(ErrorKind::InvalidData, format!("Can't parse file name '{}' got {}", batch_file_name, e)))
     }
 }
 
