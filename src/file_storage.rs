@@ -49,18 +49,6 @@ impl FileStorage {
             return Err(Error::new(ErrorKind::NotFound, format!("The path {:?} is not a directory", path)))
         }
 
-        let batch_id_file = path.join(LAST_BATCH_ID_FILE_NAME);
-
-        let last_batch_id = {
-            let file = fs::OpenOptions::new().read(true).create(true).open(&batch_id_file)?;
-            let mut lines = io::BufReader::new(file).lines();
-            lines.next().map(|result| result.and_then(|s| s.parse::<i64>()
-                .map_err(|e| Error::new(ErrorKind::InvalidData,
-                                        format!("Can't parse last batch id value '{}' from file {}", s, e)))))
-                .unwrap_or(Ok(0))?
-        };
-
-        debug!("Init lastBatchId with {}", last_batch_id);
 
         let mut ids_and_sizes = fs::read_dir(&path)?
             .filter(|dir_entry_res| dir_entry_res.as_ref()
@@ -75,7 +63,19 @@ impl FileStorage {
             .map(|result| result
                 .and_then(|name_meta| FileStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
             .collect::<Result<Vec<_>, io::Error>>()?;
+        let batch_id_file = path.join(LAST_BATCH_ID_FILE_NAME);
 
+
+        let last_batch_id = {
+            let file = fs::OpenOptions::new().read(true).create(true).open(&batch_id_file)?;
+            let mut lines = io::BufReader::new(file).lines();
+            lines.next().map(|result| result.and_then(|s| s.parse::<i64>()
+                .map_err(|e| Error::new(ErrorKind::InvalidData,
+                                        format!("Can't parse last batch id value '{}' from file {}", s, e)))))
+                .unwrap_or(Ok(ids_and_sizes.last().map(|id_size| id_size.0).unwrap_or(0)))?
+        };
+
+        debug!("Init lastBatchId with {}", last_batch_id);
         debug!("Initialized {} batches.", ids_and_sizes.len());
 
         ids_and_sizes.sort();
