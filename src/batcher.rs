@@ -238,7 +238,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         if mutex_guard.stopped {
             return Err(Error::new(ErrorKind::Interrupted,
                                   ChainedError::monad(
-                                      "The batcher has been shutdown",
+                                      "The batcher has been shut down",
                                       Box::new(mutex_guard.last_upload_result.clone()),
                                       Box::new(|any|
                                           any.downcast_ref::<Arc<io::Result<()>>>()
@@ -483,7 +483,7 @@ mod test {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Interrupted);
-        assert_eq!(error.get_ref().unwrap().to_string(), "The batcher has been stopped");
+        assert_eq!(error.get_ref().unwrap().to_string(), "The batcher has been shut down");
     }
 
     #[test]

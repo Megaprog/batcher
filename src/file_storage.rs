@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::{io, fs, fmt};
 use log::*;
-use std::io::{Error, ErrorKind, BufRead, Write, Seek, SeekFrom};
+use std::io::{Error, ErrorKind, BufRead, Write, Seek, SeekFrom, Read};
 use std::fmt::{Display, Formatter, Debug};
 
 macro_rules! batch_file {
@@ -71,15 +71,16 @@ impl FileStorage {
                 .and_then(|name_meta| FileStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
             .collect::<Result<Vec<_>, io::Error>>()?;
 
-        let batch_id_file = OpenOptions::new().read(true).write(true).create(true)
+        let mut batch_id_file = OpenOptions::new().read(true).write(true).create(true)
             .open(path.join(LAST_BATCH_ID_FILE_NAME))?;
 
         let next_batch_id = {
-            let mut lines = io::BufReader::new(batch_id_file).lines();
-            lines.next().map(|result| result.and_then(|s| s.parse::<i64>()
+            let mut buffer = String::new();
+            batch_id_file.read_to_string(&mut buffer)?;
+            buffer.parse::<i64>()
                 .map_err(|e| Error::new(ErrorKind::InvalidData,
-                                        format!("Can't parse last batch id value '{}' from file {}", s, e)))))
-                .unwrap_or(Ok(ids_and_sizes.last().map(|id_size| id_size.0).unwrap_or(0)))?
+                                        format!("Can't parse last batch id value '{}' from file: {}", &buffer, e)))
+                .unwrap_or(ids_and_sizes.last().map(|id_size| id_size.0).unwrap_or(0))
         };
 
         debug!("Init next batch id with {}", next_batch_id);
@@ -115,16 +116,26 @@ impl FileStorage {
         self.path.join(BATCH_FILE_NAME_PREFIX.to_owned() + &format!(file_id_pattern!(), file_id))
     }
 
-    fn increment_next_batch_id(&self, waiter: &mut Waiter<FileStorageSharedState>) -> io::Result<()> {
+    fn increment_next_batch_id(waiter: &mut Waiter<FileStorageSharedState>) -> io::Result<()> {
         waiter.next_batch_id += 1;
         waiter.batch_id_file.seek(SeekFrom::Start(0))?;
-        let batch_id_str = format!("{}", waiter.next_batch_id);
+        let batch_id_str = format!(file_id_pattern!(), waiter.next_batch_id);
         waiter.batch_id_file.write_all(batch_id_str.as_bytes())
+    }
+
+    fn bytes_from_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
+        if !path.exists() || fs::metadata(path)?.len() == 0 {
+            return Ok(None)
+        }
+
+        let mut buffer = Vec::new();
+        File::open(path)?.read_to_end(&mut buffer)?;
+        Ok(Some(buffer))
     }
 }
 
-impl BatchStorage<Box<BinaryBatch>> for FileStorage {
-    fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> Result<(), Error> {
+impl BatchStorage<BinaryBatch> for FileStorage {
+    fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()> {
         let mut waiter = self.shared_state.lock();
         if waiter.stopped {
             return Err(Error::new(ErrorKind::Interrupted, format!("The storage {:?} has been shut down", self)))
@@ -133,22 +144,44 @@ impl BatchStorage<Box<BinaryBatch>> for FileStorage {
         let next_batch_id = waiter.next_batch_id;
         let batch = batch_factory.create_batch(records, next_batch_id)?;
 
-        while self.is_capacity_exceeded(&batch, &waiter) {
-            waiter.wait()?;
+        if self.is_capacity_exceeded(&batch, &waiter) {
+            return Err(Error::new(ErrorKind::Other,
+                                  format!("The storage {:?} capacity exceeded: needed {} available {}",
+                                          self, batch.bytes.len(), self.max_bytes - waiter.occupied_bytes)))
         }
 
         let batch_file_path = self.batch_file_path(next_batch_id);
         OpenOptions::new().write(true).create_new(true).open(&batch_file_path)?.write_all(&batch.bytes)?;
 
         waiter.file_ids.push_back(next_batch_id);
+        FileStorage::increment_next_batch_id(&mut waiter)?;
 
         waiter.notify_one();
 
         Ok(())
     }
 
-    fn get(&self) -> Result<Box<BinaryBatch>, Error> {
-        unimplemented!()
+    fn get(&self) -> io::Result<BinaryBatch> {
+        let mut waiter = self.shared_state.lock();
+
+        loop {
+            let batch_id_opt = waiter.file_ids.front();
+            if batch_id_opt.is_none() {
+                waiter.wait()?;
+                continue;
+            }
+            let &batch_id = batch_id_opt.unwrap();
+
+            let batch_path = self.batch_file_path(batch_id);
+            let bytes_opt = FileStorage::bytes_from_file(&batch_path)?;
+            if let Some(bytes) = bytes_opt {
+                return Ok(BinaryBatch { batch_id, bytes });
+            }
+
+            warn!("Batch file {:?} is missing or empty", batch_path);
+
+            waiter.file_ids.pop_front();
+        }
     }
 
     fn remove(&self) -> Result<(), Error> {
@@ -156,11 +189,11 @@ impl BatchStorage<Box<BinaryBatch>> for FileStorage {
     }
 
     fn is_persistent(&self) -> bool {
-        unimplemented!()
+        true
     }
 
     fn is_empty(&self) -> bool {
-        unimplemented!()
+        self.shared_state.lock().file_ids.is_empty()
     }
 
     fn shutdown(self) {

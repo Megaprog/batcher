@@ -11,6 +11,14 @@ pub struct BinaryBatch {
     pub bytes: Vec<u8>
 }
 
+impl Deref for BinaryBatch {
+    type Target = Self;
+
+    fn deref(&self) -> &Self::Target {
+        &self
+    }
+}
+
 impl Display for BinaryBatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "BinaryBatch{{id: {}, len: {}}}", self.batch_id, self.bytes.len())

@@ -100,7 +100,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
         let mut guard = self.shared_state.lock();
         loop {
             if let Some(batch) = guard.batches_queue.front() {
-                return Ok(batch.clone());
+                return Ok(Arc::clone(batch));
             }
             guard.wait()?;
         }
