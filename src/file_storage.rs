@@ -23,7 +23,7 @@ static LAST_BATCH_ID_FILE_NAME: &str = "nextBatchId";
 const DEFAULT_MAX_BYTES_IN_FILES: u64 = std::u64::MAX;
 
 pub struct FileStorageSharedState {
-    pub(crate) file_ids: VecDeque<i64>,
+    pub(crate) file_ids: VecDeque<(i64, u64)>,
     occupied_bytes: u64,
     next_batch_id: i64,
     batch_id_file: File,
@@ -87,14 +87,14 @@ impl FileStorage {
         debug!("Initialized {} batches.", ids_and_sizes.len());
 
         ids_and_sizes.sort();
-        let (file_ids, sizes) = ids_and_sizes.into_iter().unzip::<_, _, VecDeque<_>, Vec<_>>();
+        let occupied_bytes = ids_and_sizes.iter().map(|id_size| id_size.1).sum();
 
         Ok(FileStorage {
             path,
             max_bytes,
             shared_state: Arc::new(Lock::new(FileStorageSharedState {
-                file_ids,
-                occupied_bytes: sizes.into_iter().sum(),
+                file_ids: ids_and_sizes.into(),
+                occupied_bytes,
                 next_batch_id,
                 batch_id_file,
                 stopped: false,
@@ -106,10 +106,6 @@ impl FileStorage {
         batch_file_name[..BATCH_FILE_NAME_PREFIX.len()].parse::<i64>()
             .map_err(|e|
                 Error::new(ErrorKind::InvalidData, format!("Can't parse file name '{}' got {}", batch_file_name, e)))
-    }
-
-    fn is_capacity_exceeded(&self, batch: &BinaryBatch, waiter: &Waiter<FileStorageSharedState>) -> bool {
-        waiter.occupied_bytes + batch.bytes.len() as u64 > self.max_bytes
     }
 
     fn batch_file_path(&self, file_id: i64) -> PathBuf {
@@ -143,17 +139,20 @@ impl BatchStorage<BinaryBatch> for FileStorage {
 
         let next_batch_id = waiter.next_batch_id;
         let batch = batch_factory.create_batch(records, next_batch_id)?;
+        let number_bytes = batch.bytes.len() as u64;
 
-        if self.is_capacity_exceeded(&batch, &waiter) {
+        if waiter.occupied_bytes + number_bytes > self.max_bytes {
             return Err(Error::new(ErrorKind::Other,
                                   format!("The storage {:?} capacity exceeded: needed {} available {}",
-                                          self, batch.bytes.len(), self.max_bytes - waiter.occupied_bytes)))
+                                          self, number_bytes, self.max_bytes - waiter.occupied_bytes)))
         }
 
         let batch_file_path = self.batch_file_path(next_batch_id);
         OpenOptions::new().write(true).create_new(true).open(&batch_file_path)?.write_all(&batch.bytes)?;
 
-        waiter.file_ids.push_back(next_batch_id);
+        waiter.occupied_bytes += number_bytes;
+        waiter.file_ids.push_back((next_batch_id, number_bytes));
+
         FileStorage::increment_next_batch_id(&mut waiter)?;
 
         waiter.notify_one();
@@ -170,12 +169,12 @@ impl BatchStorage<BinaryBatch> for FileStorage {
                 waiter.wait()?;
                 continue;
             }
-            let &batch_id = batch_id_opt.unwrap();
+            let &batch_id_size = batch_id_opt.unwrap();
 
-            let batch_path = self.batch_file_path(batch_id);
+            let batch_path = self.batch_file_path(batch_id_size.0);
             let bytes_opt = FileStorage::bytes_from_file(&batch_path)?;
             if let Some(bytes) = bytes_opt {
-                return Ok(BinaryBatch { batch_id, bytes });
+                return Ok(BinaryBatch { batch_id: batch_id_size.0, bytes });
             }
 
             warn!("Batch file {:?} is missing or empty", batch_path);
@@ -185,7 +184,18 @@ impl BatchStorage<BinaryBatch> for FileStorage {
     }
 
     fn remove(&self) -> Result<(), Error> {
-        unimplemented!()
+        let mut waiter = self.shared_state.lock();
+        let batch_id_opt = waiter.file_ids.front();
+        if let Some(&batch_id_size) = batch_id_opt {
+            let batch_path = self.batch_file_path(batch_id_size.0);
+            fs::remove_file(batch_path).and_then(|_| {
+                waiter.file_ids.pop_front();
+                waiter.occupied_bytes -= batch_id_size.1;
+                Ok(())
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn is_persistent(&self) -> bool {
@@ -197,6 +207,8 @@ impl BatchStorage<BinaryBatch> for FileStorage {
     }
 
     fn shutdown(self) {
-        unimplemented!()
+        let mut waiter = self.shared_state.lock();
+        waiter.stopped = true;
+        waiter.interrupt();
     }
 }
