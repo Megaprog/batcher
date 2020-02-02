@@ -380,7 +380,6 @@ mod test {
     use miniz_oxide::inflate::decompress_to_vec;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::collections::VecDeque;
-    use log::*;
 
     #[derive(Clone)]
     struct MockBatchSender {

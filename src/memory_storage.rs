@@ -285,7 +285,7 @@ mod test_memory_storage {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::batch_storage::{BatchStorage, BinaryBatch};
     use std::thread::JoinHandle;
     use std::{thread, io};
