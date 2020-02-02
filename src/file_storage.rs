@@ -18,7 +18,7 @@ macro_rules! file_id_pattern {
 
 static BATCH_FILE: &str = batch_file!();
 static BATCH_FILE_NAME_PREFIX: &str = concat!(batch_file!(), "-");
-static LAST_BATCH_ID_FILE_NAME: &str = "nextBatchId";
+static NEXT_BATCH_ID_FILE_NAME: &str = "nextBatchId";
 
 const DEFAULT_MAX_BYTES_IN_FILES: u64 = std::u64::MAX;
 
@@ -72,8 +72,9 @@ impl FileStorage {
                 .and_then(|name_meta| FileStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
             .collect::<Result<Vec<_>, io::Error>>()?;
 
+        let batch_id_path = path.join(NEXT_BATCH_ID_FILE_NAME);
         let mut batch_id_file = OpenOptions::new().read(true).write(true).create(true)
-            .open(path.join(LAST_BATCH_ID_FILE_NAME))?;
+            .open(&batch_id_path)?;
 
         let next_batch_id = if batch_id_file.metadata()?.len() == 0 {
             ids_and_sizes.last().map(|id_size| id_size.0).unwrap_or(0)
@@ -82,7 +83,8 @@ impl FileStorage {
             batch_id_file.read_to_string(&mut buffer)?;
             buffer.parse::<i64>()
                 .map_err(|e| Error::new(ErrorKind::InvalidData,
-                                        format!("Can't parse last batch id value '{}' from file: {}", &buffer, e)))?
+                                        format!("Can't parse last batch id value '{}' from the file {:?}: {}",
+                                                &buffer, batch_id_path, e)))?
         };
 
         debug!("Init next batch id with {}", next_batch_id);
@@ -221,19 +223,42 @@ mod test_file_storage {
     use crate::memory_storage::MemoryStorage;
     use std::{io, thread};
     use std::time::Duration;
-    use crate::file_storage::FileStorage;
-    use tempfile::tempdir;
-
-    static BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1]});
+    use crate::file_storage::{FileStorage, NEXT_BATCH_ID_FILE_NAME};
+    use tempfile::{tempdir, TempDir};
+    use crate::memory_storage::test::BATCH_FACTORY;
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
 
     #[test]
-    fn fist_time() {
+    fn zero_next_batch_id() {
         let dir = tempdir();
-        println!("Temp dir: {:?}", &dir);
         let file_storage = FileStorage::init(dir.unwrap().into_path());
         assert!(file_storage.is_ok());
+        assert_eq!(0, file_storage.unwrap().shared_state.lock().next_batch_id);
+    }
 
-        let file_storage = file_storage.unwrap();
+    #[test]
+    fn none_next_batch_id() {
+        let dir = tempdir();
+        let mut next_batch_id_file = open_next_batch_id_file(&dir);
+        next_batch_id_file.write_all(format!(file_id_pattern!(), 3).as_bytes()).unwrap();
+        let file_storage = FileStorage::init(dir.unwrap().into_path());
+        assert!(file_storage.is_ok());
+        assert_eq!(3, file_storage.unwrap().shared_state.lock().next_batch_id);
+    }
+
+    #[test]
+    fn wrong_next_batch_id_file() {
+        let dir = tempdir();
+        let mut next_batch_id_file = open_next_batch_id_file(&dir);
+        next_batch_id_file.write_all("abc".as_bytes()).unwrap();
+        let file_storage = FileStorage::init(dir.unwrap().into_path());
+        assert!(file_storage.is_err());
+    }
+
+    fn open_next_batch_id_file(dir: &io::Result<TempDir>) -> File {
+        OpenOptions::new().write(true).create(true)
+            .open(dir.as_ref().unwrap().path().join(NEXT_BATCH_ID_FILE_NAME)).unwrap()
     }
 
     #[ignore]
