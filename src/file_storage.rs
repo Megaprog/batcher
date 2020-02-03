@@ -232,7 +232,7 @@ mod test_file_storage {
     #[test]
     fn zero_next_batch_id() {
         let dir = tempdir();
-        let file_storage = FileStorage::init(dir.unwrap().into_path());
+        let file_storage = FileStorage::init(dir.unwrap().path());
         assert!(file_storage.is_ok());
         assert_eq!(0, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
@@ -242,7 +242,7 @@ mod test_file_storage {
         let dir = tempdir();
         let mut next_batch_id_file = open_next_batch_id_file(&dir);
         next_batch_id_file.write_all(format!(file_id_pattern!(), 3).as_bytes()).unwrap();
-        let file_storage = FileStorage::init(dir.unwrap().into_path());
+        let file_storage = FileStorage::init(dir.unwrap().path());
         assert!(file_storage.is_ok());
         assert_eq!(3, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
@@ -252,7 +252,7 @@ mod test_file_storage {
         let dir = tempdir();
         let mut next_batch_id_file = open_next_batch_id_file(&dir);
         next_batch_id_file.write_all("abc".as_bytes()).unwrap();
-        let file_storage = FileStorage::init(dir.unwrap().into_path());
+        let file_storage = FileStorage::init(dir.unwrap().path());
         assert!(file_storage.is_err());
     }
 
