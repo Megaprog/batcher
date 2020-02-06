@@ -59,15 +59,14 @@ impl FileStorage {
 
         let mut ids_and_sizes = fs::read_dir(&path)?
             .filter(|dir_entry_res| dir_entry_res.as_ref()
-                .map(|dir_entry| dir_entry.path().is_file()).unwrap_or(true) )
+                .map(|dir_entry| dir_entry.path().is_file()).unwrap_or(true))
             .map(|dir_entry_res| dir_entry_res
-                .map(|dir_entry| dir_entry.file_name())
-
-                .map(|file_name| file_name.to_string_lossy().into_owned()))
+                .map(|dir_entry| (dir_entry.file_name(), dir_entry.path()))
+                .map(|file_name| (file_name.0.to_string_lossy().into_owned(), file_name.1)))
             .filter(|file_name_res| file_name_res.as_ref()
-                .map(|file_name| file_name.starts_with(BATCH_FILE_NAME_PREFIX)).unwrap_or(true))
+                .map(|file_name| file_name.0.starts_with(BATCH_FILE_NAME_PREFIX)).unwrap_or(true))
             .map(|file_name_res| file_name_res
-                .and_then(|file_name| fs::metadata(&file_name).map(|meta| (file_name, meta.len()))))
+                .and_then(|file_name| fs::metadata(&file_name.1).map(|meta| (file_name.0, meta.len()))))
             .map(|result| result
                 .and_then(|name_meta| FileStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
             .collect::<Result<Vec<_>, io::Error>>()?;
@@ -77,13 +76,13 @@ impl FileStorage {
             .open(&batch_id_path)?;
 
         let next_batch_id = if batch_id_file.metadata()?.len() == 0 {
-            ids_and_sizes.last().map(|id_size| id_size.0).unwrap_or(0)
+            ids_and_sizes.last().map(|id_size| id_size.0 + 1).unwrap_or(1)
         } else {
             let mut buffer = String::new();
             batch_id_file.read_to_string(&mut buffer)?;
             buffer.parse::<i64>()
                 .map_err(|e| Error::new(ErrorKind::InvalidData,
-                                        format!("Can't parse last batch id value '{}' from the file {:?}: {}",
+                                        format!("Cannot parse last batch id value {} from the file {:?}: {}",
                                                 &buffer, batch_id_path, e)))?
         };
 
@@ -107,9 +106,9 @@ impl FileStorage {
     }
 
     fn batch_id(batch_file_name: &str) -> io::Result<i64> {
-        batch_file_name[..BATCH_FILE_NAME_PREFIX.len()].parse::<i64>()
+        batch_file_name[BATCH_FILE_NAME_PREFIX.len()..].parse::<i64>()
             .map_err(|e|
-                Error::new(ErrorKind::InvalidData, format!("Can't parse file name '{}' got {}", batch_file_name, e)))
+                Error::new(ErrorKind::InvalidData, format!("Cannot parse file name {} got {}", batch_file_name, e)))
     }
 
     fn batch_file_path(&self, file_id: i64) -> PathBuf {
@@ -124,13 +123,13 @@ impl FileStorage {
     }
 
     fn bytes_from_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
-        if !path.exists() || fs::metadata(path)?.len() == 0 {
+        if !path.exists() {
             return Ok(None)
         }
 
         let mut buffer = Vec::new();
         File::open(path)?.read_to_end(&mut buffer)?;
-        Ok(Some(buffer))
+        if buffer.len() > 0 { Ok(Some(buffer)) } else { Ok(None) }
     }
 }
 
@@ -219,79 +218,154 @@ impl BatchStorage<BinaryBatch> for FileStorage {
 
 #[cfg(test)]
 mod test_file_storage {
-    use crate::batch_storage::{BinaryBatch, BatchStorage};
+    use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
     use crate::memory_storage::MemoryStorage;
     use std::{io, thread};
     use std::time::Duration;
-    use crate::file_storage::{FileStorage, NEXT_BATCH_ID_FILE_NAME};
+    use crate::file_storage::{FileStorage, NEXT_BATCH_ID_FILE_NAME, BATCH_FILE_NAME_PREFIX};
     use tempfile::{tempdir, TempDir};
     use crate::memory_storage::test::BATCH_FACTORY;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
+    use std::path::Path;
+    use std::sync::{Once, Arc};
+    use env_logger::{Builder, Env};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static INIT: Once = Once::new();
+
+    fn init_log() {
+        INIT.call_once(|| {
+            Builder::from_env(Env::default().default_filter_or("trace")).is_test(true)
+                .format_timestamp_millis()
+                .init();
+        });
+    }
 
     #[test]
     fn zero_next_batch_id() {
         let dir = tempdir();
-        let file_storage = FileStorage::init(dir.unwrap().path());
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
         assert!(file_storage.is_ok());
-        assert_eq!(0, file_storage.unwrap().shared_state.lock().next_batch_id);
+        assert_eq!(1, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
 
     #[test]
     fn none_next_batch_id() {
         let dir = tempdir();
-        let mut next_batch_id_file = open_next_batch_id_file(&dir);
-        next_batch_id_file.write_all(format!(file_id_pattern!(), 3).as_bytes()).unwrap();
-        let file_storage = FileStorage::init(dir.unwrap().path());
+        let mut next_batch_id_file = open_next_batch_id_file(&dir,NEXT_BATCH_ID_FILE_NAME);
+        next_batch_id_file.write_all(format!(file_id_pattern!(), 2).as_bytes()).unwrap();
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
         assert!(file_storage.is_ok());
-        assert_eq!(3, file_storage.unwrap().shared_state.lock().next_batch_id);
+        assert_eq!(2, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
 
     #[test]
     fn wrong_next_batch_id_file() {
         let dir = tempdir();
-        let mut next_batch_id_file = open_next_batch_id_file(&dir);
+        let mut next_batch_id_file = open_next_batch_id_file(&dir,NEXT_BATCH_ID_FILE_NAME);
         next_batch_id_file.write_all("abc".as_bytes()).unwrap();
-        let file_storage = FileStorage::init(dir.unwrap().path());
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
         assert!(file_storage.is_err());
     }
 
-    fn open_next_batch_id_file(dir: &io::Result<TempDir>) -> File {
-        OpenOptions::new().write(true).create(true)
-            .open(dir.as_ref().unwrap().path().join(NEXT_BATCH_ID_FILE_NAME)).unwrap()
+    #[test]
+    fn next_batch_id_by_batches() {
+        let dir = tempdir();
+        open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
+        open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 2));
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
+        assert!(file_storage.is_ok());
+        assert_eq!(3, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
 
-    #[ignore]
+    #[test]
+    fn scenario() {
+        init_log();
+        let dir = tempdir();
+        let mut f1 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
+        f1.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();
+        let mut f2 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 2));
+        f2.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+
+        let batch = file_storage.get().unwrap();
+        assert_eq!(1, batch.batch_id);
+        assert_eq!(vec![1, 2], batch.bytes);
+
+        file_storage.store(String::new(), &BATCH_FACTORY).unwrap();
+        let batch = file_storage.get().unwrap();
+        //the same batch
+        assert_eq!(1, batch.batch_id);
+        assert_eq!(vec![1, 2], batch.bytes);
+        //again
+        let batch = file_storage.get().unwrap();
+        assert_eq!(1, batch.batch_id);
+        assert_eq!(vec![1, 2], batch.bytes);
+
+        file_storage.remove();
+        let batch = file_storage.get().unwrap();
+        assert_eq!(2, batch.batch_id);
+        assert_eq!(vec![1, 2], batch.bytes);
+
+        file_storage.remove();
+        let batch = file_storage.get().unwrap();
+        assert_eq!(3, batch.batch_id);
+        assert_eq!(vec![1, 2], batch.bytes);
+
+        file_storage.remove();
+        assert!(file_storage.shared_state.lock().file_ids.is_empty());
+    }
+
+    fn open_next_batch_id_file(dir: &io::Result<TempDir>, path: impl AsRef<Path>) -> File {
+        OpenOptions::new().write(true).create(true)
+            .open(dir.as_ref().unwrap().path().join(path)).unwrap()
+    }
+
+    #[test]
+    fn capacity_exceeded() {
+        let dir = tempdir();
+        let file_storage = FileStorage::init_with_max_bytes(dir.as_ref().unwrap().path(), 1).unwrap();
+        assert!(file_storage.store(String::new(), &BATCH_FACTORY).is_err());
+    }
+
     #[test]
     fn blocks_forever() {
-        let memory_storage = MemoryStorage::with_max_batch_bytes(1);
-        assert!(memory_storage.store("Test1".to_string(), &BATCH_FACTORY).is_ok());
+        let dir = tempdir();
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
 
-        let cloned_storage = memory_storage.clone();
+        let working = Arc::new(AtomicBool::new(true));
+
+        let cloned_storage = file_storage.clone();
+        let cloned_working = working.clone();
         let join_handle = thread::spawn(move || {
-            assert!(cloned_storage.store("Test2".to_string(), &BATCH_FACTORY).is_ok());
+            cloned_storage.get().unwrap();
+            cloned_working.store(false, Ordering::Relaxed);
         });
 
         thread::sleep(Duration::from_millis(10));
 
-        assert_eq!(1, memory_storage.0.shared_state.lock().batches_queue.len());
+        assert!(working.load(Ordering::Relaxed));
     }
 
-//    #[test]
-//    fn producer_first() {
-//        let mut file_storage = FileStorage::new();
-//        crate::memory_storage::test::producer_first(memory_storage);
-//    }
-//
-//    #[test]
-//    fn consumer_first() {
-//        let mut file_storage = FileStorage::new();
-//        crate::memory_storage::test::consumer_first(file_storage);
-//    }
-//
-//    #[test]
-//    fn shutdown() {
-//        let file_storage = FileStorage::new();
-//        crate::memory_storage::test::shutdown(file_storage);
-//    }
+    #[test]
+    fn producer_first() {
+        let dir = tempdir();
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        crate::memory_storage::test::producer_first(file_storage);
+    }
+
+    #[test]
+    fn consumer_first() {
+        let dir = tempdir();
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        crate::memory_storage::test::consumer_first(file_storage);
+    }
+
+    #[test]
+    fn shutdown() {
+        let dir = tempdir();
+        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        crate::memory_storage::test::shutdown(file_storage);
+    }
 }
