@@ -223,7 +223,7 @@ mod test_file_storage {
     use std::{io, thread};
     use std::time::Duration;
     use crate::file_storage::{FileStorage, NEXT_BATCH_ID_FILE_NAME, BATCH_FILE_NAME_PREFIX};
-    use tempfile::{tempdir, TempDir};
+    use tempfile::tempdir;
     use crate::memory_storage::test::BATCH_FACTORY;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
@@ -244,37 +244,37 @@ mod test_file_storage {
 
     #[test]
     fn zero_next_batch_id() {
-        let dir = tempdir();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
+        let dir = tempdir().unwrap();
+        let file_storage = FileStorage::init(dir.path());
         assert!(file_storage.is_ok());
         assert_eq!(1, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
 
     #[test]
     fn none_next_batch_id() {
-        let dir = tempdir();
+        let dir = tempdir().unwrap();
         let mut next_batch_id_file = open_next_batch_id_file(&dir,NEXT_BATCH_ID_FILE_NAME);
         next_batch_id_file.write_all(format!(file_id_pattern!(), 2).as_bytes()).unwrap();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
+        let file_storage = FileStorage::init(dir.path());
         assert!(file_storage.is_ok());
         assert_eq!(2, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
 
     #[test]
     fn wrong_next_batch_id_file() {
-        let dir = tempdir();
+        let dir = tempdir().unwrap();
         let mut next_batch_id_file = open_next_batch_id_file(&dir,NEXT_BATCH_ID_FILE_NAME);
         next_batch_id_file.write_all("abc".as_bytes()).unwrap();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
+        let file_storage = FileStorage::init(dir.path());
         assert!(file_storage.is_err());
     }
 
     #[test]
     fn next_batch_id_by_batches() {
-        let dir = tempdir();
+        let dir = tempdir().unwrap();
         open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
         open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 2));
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path());
+        let file_storage = FileStorage::init(dir.path());
         assert!(file_storage.is_ok());
         assert_eq!(3, file_storage.unwrap().shared_state.lock().next_batch_id);
     }
@@ -282,12 +282,12 @@ mod test_file_storage {
     #[test]
     fn scenario() {
         init_log();
-        let dir = tempdir();
+        let dir = tempdir().unwrap();
         let mut f1 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
         f1.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();
         let mut f2 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 2));
         f2.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        let file_storage = FileStorage::init(dir.path()).unwrap();
 
         let batch = file_storage.get().unwrap();
         assert_eq!(1, batch.batch_id);
@@ -317,9 +317,9 @@ mod test_file_storage {
         assert!(file_storage.shared_state.lock().file_ids.is_empty());
     }
 
-    fn open_next_batch_id_file(dir: &io::Result<TempDir>, path: impl AsRef<Path>) -> File {
+    fn open_next_batch_id_file(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> File {
         OpenOptions::new().write(true).create(true)
-            .open(dir.as_ref().unwrap().path().join(path)).unwrap()
+            .open(dir.as_ref().join(path)).unwrap()
     }
 
     #[test]
