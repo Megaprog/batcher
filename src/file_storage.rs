@@ -331,8 +331,8 @@ mod test_file_storage {
 
     #[test]
     fn blocks_forever() {
-        let dir = tempdir();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        let dir = tempdir().unwrap();
+        let file_storage = FileStorage::init(dir.path()).unwrap();
 
         let working = Arc::new(AtomicBool::new(true));
 
@@ -350,22 +350,22 @@ mod test_file_storage {
 
     #[test]
     fn producer_first() {
-        let dir = tempdir();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        let dir = tempdir().unwrap();
+        let file_storage = FileStorage::init(dir.path()).unwrap();
         crate::memory_storage::test::producer_first(file_storage);
     }
 
     #[test]
     fn consumer_first() {
-        let dir = tempdir();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        let dir = tempdir().unwrap();
+        let file_storage = FileStorage::init(dir.path()).unwrap();
         crate::memory_storage::test::consumer_first(file_storage);
     }
 
     #[test]
     fn shutdown() {
-        let dir = tempdir();
-        let file_storage = FileStorage::init(dir.as_ref().unwrap().path()).unwrap();
+        let dir = tempdir().unwrap();
+        let file_storage = FileStorage::init(dir.path()).unwrap();
         crate::memory_storage::test::shutdown(file_storage);
     }
 }
