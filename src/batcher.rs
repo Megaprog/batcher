@@ -7,7 +7,7 @@ use crate::batch_sender::BatchSender;
 use std::ops::Deref;
 use std::thread::JoinHandle;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Barrier};
 use std::io::{Error, ErrorKind};
 use log::*;
 
@@ -123,6 +123,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         let mut uploaded_batch_counter = 0;
         let mut all_batch_counter = 0;
         let mut send_batches_bytes = 0;
+
         'outer: loop {
             let batch_read_start = (self.clock)();
             let batch_result = self.batch_storage.get();
@@ -207,7 +208,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     }
 
     fn stop_inner(&self, hard: bool, soft: bool) -> io::Result<()> {
-        info!("Stop with hard: {} or soft: {}", hard, soft);
+        info!("Stop with hard: {} and soft: {}", hard, soft);
         {
             let mut mutex_guard = self.shared_state.lock().unwrap();
             if mutex_guard.stopped {
@@ -307,11 +308,16 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         mutex_guard.stopped = false;
         mutex_guard.last_flush_time = (self.clock)();
 
+        let barrier = Arc::new(Barrier::new(2));
+        let cloned_barrier = barrier.clone();
+
         let cloned_batcher = self.clone();
         mutex_guard.upload_thread = Some(thread::Builder::new().name("batcher-upload".to_string()).spawn(move || {
+            cloned_barrier.wait();
             cloned_batcher.upload();
         }).unwrap());
 
+        barrier.wait();
         true
     }
 
@@ -376,8 +382,9 @@ Drop for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storag
         Sender: BatchSender
 {
     fn drop(&mut self) {
-        let opt = Arc::get_mut(&mut self.shared_state);
-        if opt.is_some() {
+        if !self.shared_state.lock().unwrap().stopped
+            && Arc::strong_count(&self.shared_state) == 2 //upload thread holds the arc
+        {
             let _ = self.stop_inner(false, false);
         }
     }
@@ -501,6 +508,19 @@ mod test {
         let error = result.unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Interrupted);
         assert_eq!(error.get_ref().unwrap().to_string(), "The batcher has been shut down");
+    }
+
+    #[test]
+    fn test_drop() {
+        init();
+        let mut batcher = BatcherImpl::new(
+            RECORDS_BUILDER_FACTORY,
+            GzippedJsonDisplayBatchFactory::new("s1"),
+            MemoryStorage::new(),
+            MockBatchSender::new());
+
+        assert!(batcher.start());
+        drop(batcher);
     }
 
     #[test]
