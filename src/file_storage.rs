@@ -209,7 +209,7 @@ impl BatchStorage<BinaryBatch> for FileStorage {
         self.shared_state.lock().file_ids.is_empty()
     }
 
-    fn shutdown(self) {
+    fn shutdown(&self) {
         let mut waiter = self.shared_state.lock();
         waiter.stopped = true;
         waiter.interrupt();

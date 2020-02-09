@@ -43,11 +43,11 @@ pub struct BatcherSharedState<T, Records, Builder: RecordsBuilder<T, Records>> {
 }
 
 #[derive(Clone)]
-pub struct BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
+pub struct BatcherImpl<T: Clone + Send + 'static, Records: Clone + Send + 'static, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
     where
         Builder: RecordsBuilder<T, Records>,
         BuilderFactory: RecordsBuilderFactory<T, Records, Builder>,
-        Batch: Deref<Target=BinaryBatch> + Clone,
+        Batch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
         Factory: BatchFactory<Records>,
         Storage: BatchStorage<Batch>,
         Sender: BatchSender
@@ -206,7 +206,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
         mutex_guard.hard_stop || (self.batch_storage.is_persistent() && !mutex_guard.soft_stop) || self.batch_storage.is_empty()
     }
 
-    fn stop_inner(self, hard: bool, soft: bool) -> io::Result<()> {
+    fn stop_inner(&self, hard: bool, soft: bool) -> io::Result<()> {
         info!("Stop with hard: {} or soft: {}", hard, soft);
         {
             let mut mutex_guard = self.shared_state.lock().unwrap();
@@ -315,15 +315,15 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         true
     }
 
-    fn stop(self) -> io::Result<()> {
+    fn stop(mut self) -> io::Result<()> {
         self.stop_inner(false, false)
     }
 
-    fn hard_stop(self) -> io::Result<()> {
+    fn hard_stop(mut self) -> io::Result<()> {
         self.stop_inner(true, false)
     }
 
-    fn soft_stop(self) -> io::Result<()> {
+    fn soft_stop(mut self) -> io::Result<()> {
         self.stop_inner(false, true)
     }
 
@@ -362,6 +362,24 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         }
 
         return Ok(false)
+    }
+}
+
+impl<T: Clone + Send + 'static, Records: Clone + Send + 'static, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
+Drop for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
+    where
+        Builder: RecordsBuilder<T, Records>,
+        BuilderFactory: RecordsBuilderFactory<T, Records, Builder>,
+        Batch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
+        Factory: BatchFactory<Records>,
+        Storage: BatchStorage<Batch>,
+        Sender: BatchSender
+{
+    fn drop(&mut self) {
+        let opt = Arc::get_mut(&mut self.shared_state);
+        if opt.is_some() {
+            let _ = self.stop_inner(false, false);
+        }
     }
 }
 
@@ -446,7 +464,7 @@ mod test {
         fn is_empty(&self) -> bool {
             self.0.is_empty()
         }
-        fn shutdown(self) {
+        fn shutdown(&self) {
             self.0.shutdown()
         }
     }

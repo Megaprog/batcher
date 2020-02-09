@@ -125,7 +125,7 @@ impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
         self.shared_state.lock().batches_queue.is_empty()
     }
 
-    fn shutdown(self) {
+    fn shutdown(&self) {
         let mut guard = self.shared_state.lock();
         guard.stopped = true;
         guard.interrupt();
@@ -195,7 +195,7 @@ impl<'a> BatchStorage<Arc<BinaryBatch>> for MemoryStorage {
         self.0.is_empty()
     }
 
-    fn shutdown(self) {
+    fn shutdown(&self) {
         self.0.shutdown();
     }
 }
