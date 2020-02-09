@@ -308,16 +308,11 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         mutex_guard.stopped = false;
         mutex_guard.last_flush_time = (self.clock)();
 
-        let barrier = Arc::new(Barrier::new(2));
-        let cloned_barrier = barrier.clone();
-
         let cloned_batcher = self.clone();
         mutex_guard.upload_thread = Some(thread::Builder::new().name("batcher-upload".to_string()).spawn(move || {
-            cloned_barrier.wait();
             cloned_batcher.upload();
         }).unwrap());
 
-        barrier.wait();
         true
     }
 
@@ -371,24 +366,6 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
     }
 }
 
-impl<T: Clone + Send + 'static, Records: Clone + Send + 'static, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
-Drop for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender>
-    where
-        Builder: RecordsBuilder<T, Records>,
-        BuilderFactory: RecordsBuilderFactory<T, Records, Builder>,
-        Batch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        Factory: BatchFactory<Records>,
-        Storage: BatchStorage<Batch>,
-        Sender: BatchSender
-{
-    fn drop(&mut self) {
-        if !self.shared_state.lock().unwrap().stopped
-            && Arc::strong_count(&self.shared_state) == 2 //upload thread holds the arc
-        {
-            let _ = self.stop_inner(false, false);
-        }
-    }
-}
 
 #[cfg(test)]
 mod test {
