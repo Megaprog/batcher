@@ -8,6 +8,7 @@ mod waiter;
 mod batch_storage;
 mod memory_storage;
 mod file_storage;
+mod combined_storage;
 mod batch_sender;
 mod chained_error;
 mod batch_records;

@@ -25,12 +25,14 @@ impl Display for BinaryBatch {
     }
 }
 
+pub type BatchId = i64;
+
 pub trait BatchFactory<R>: Clone + Send + 'static {
-    fn create_batch(&self, records: R, batch_id: i64) -> io::Result<BinaryBatch>;
+    fn create_batch(&self, records: R, batch_id: BatchId) -> io::Result<BinaryBatch>;
 }
 
 impl<R: 'static> BatchFactory<R> for fn(R, i64) -> io::Result<BinaryBatch> {
-    fn create_batch(&self, records: R, batch_id: i64) -> io::Result<BinaryBatch> {
+    fn create_batch(&self, records: R, batch_id: BatchId) -> io::Result<BinaryBatch> {
         self(records, batch_id)
     }
 }

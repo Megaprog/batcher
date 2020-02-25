@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
+use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory, BatchId};
 use crate::waiter::{Lock, Waiter};
 use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
@@ -8,36 +8,47 @@ use std::{io, fs, fmt};
 use log::*;
 use std::io::{Error, ErrorKind, BufRead, Write, Seek, SeekFrom, Read};
 use std::fmt::{Display, Formatter, Debug};
+use std::ops::Deref;
+use std::thread::JoinHandle;
+use crate::file_storage::FileStorage;
 
-macro_rules! batch_file {
-    () => ( "batchFile" )
+
+pub trait BatchIdGetter: Clone + Send + 'static {
+    fn next_batch_id(&self) -> io::Result<BatchId>;
 }
-macro_rules! file_id_pattern {
-    () => ( "{:011}" )
+
+impl BatchIdGetter for fn() -> io::Result<BatchId> {
+    fn next_batch_id(&self) -> io::Result<BatchId> {
+        self()
+    }
 }
 
-static BATCH_FILE: &str = batch_file!();
-static BATCH_FILE_NAME_PREFIX: &str = concat!(batch_file!(), "-");
-static NEXT_BATCH_ID_FILE_NAME: &str = "nextBatchId";
+impl BatchIdGetter for FileStorage {
+    fn next_batch_id(&self) -> io::Result<BatchId> {
+        Ok(self.shared_state.lock().next_batch_id)
+    }
+}
 
-const DEFAULT_MAX_BYTES_IN_FILES: u64 = std::u64::MAX;
-
-pub struct FileStorageSharedState {
-    pub(crate) file_ids: VecDeque<(i64, u64)>,
-    occupied_bytes: u64,
-    pub(crate) next_batch_id: i64,
-    batch_id_file: File,
+pub struct CombinedStorageSharedState {
+    next_batch_id: i64,
     stopped: bool,
+    saving_thread: Option<JoinHandle<()>>,
+    last_upload_result: Arc<io::Result<()>>,
 }
 
 #[derive(Clone)]
-pub struct FileStorage {
-    path: PathBuf,
-    pub max_bytes: u64,
-    pub(crate) shared_state: Arc<Lock<FileStorageSharedState>>
+pub struct CombinedStorage<Batch, Storage1, Storage2>
+    where
+        Batch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
+        Storage1: BatchStorage<Batch>,
+        Storage2: BatchStorage<Batch>
+{
+    fist: Storage1,
+    second: Storage2,
+    pub(crate) shared_state: Arc<Lock<CombinedStorageSharedState>>
 }
 
-impl Debug for FileStorage {
+impl Debug for CombinedStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileStorage")
             .field("path", &self.path)
@@ -45,12 +56,12 @@ impl Debug for FileStorage {
     }
 }
 
-impl FileStorage {
-    pub fn init(path: impl Into<PathBuf>) -> io::Result<FileStorage> {
-        FileStorage::init_with_max_bytes(path, DEFAULT_MAX_BYTES_IN_FILES)
+impl CombinedStorage {
+    pub fn init(path: impl Into<PathBuf>) -> io::Result<CombinedStorage> {
+        CombinedStorage::init_with_max_bytes(path, DEFAULT_MAX_BYTES_IN_FILES)
     }
 
-    pub fn init_with_max_bytes(path: impl Into<PathBuf>, max_bytes: u64) -> io::Result<FileStorage> {
+    pub fn init_with_max_bytes(path: impl Into<PathBuf>, max_bytes: u64) -> io::Result<CombinedStorage> {
         let path = path.into();
         fs::create_dir_all(&path)?;
         if !path.is_dir() {
@@ -68,7 +79,7 @@ impl FileStorage {
             .map(|file_name_res| file_name_res
                 .and_then(|file_name| fs::metadata(&file_name.1).map(|meta| (file_name.0, meta.len()))))
             .map(|result| result
-                .and_then(|name_meta| FileStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
+                .and_then(|name_meta| CombinedStorage::batch_id(&name_meta.0).map(|id| (id, name_meta.1))))
             .collect::<Result<Vec<_>, io::Error>>()?;
 
         let batch_id_path = path.join(NEXT_BATCH_ID_FILE_NAME);
@@ -92,10 +103,10 @@ impl FileStorage {
         ids_and_sizes.sort();
         let occupied_bytes = ids_and_sizes.iter().map(|id_size| id_size.1).sum();
 
-        Ok(FileStorage {
+        Ok(CombinedStorage {
             path,
             max_bytes,
-            shared_state: Arc::new(Lock::new(FileStorageSharedState {
+            shared_state: Arc::new(Lock::new(CombinedStorageSharedState {
                 file_ids: ids_and_sizes.into(),
                 occupied_bytes,
                 next_batch_id,
@@ -115,7 +126,7 @@ impl FileStorage {
         self.path.join(BATCH_FILE_NAME_PREFIX.to_owned() + &format!(file_id_pattern!(), file_id))
     }
 
-    fn increment_next_batch_id(waiter: &mut Waiter<FileStorageSharedState>) -> io::Result<()> {
+    fn increment_next_batch_id(waiter: &mut Waiter<CombinedStorageSharedState>) -> io::Result<()> {
         waiter.next_batch_id += 1;
         waiter.batch_id_file.seek(SeekFrom::Start(0))?;
         let batch_id_str = format!(file_id_pattern!(), waiter.next_batch_id);
@@ -133,7 +144,7 @@ impl FileStorage {
     }
 }
 
-impl BatchStorage<BinaryBatch> for FileStorage {
+impl BatchStorage<BinaryBatch> for CombinedStorage {
     fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()> {
         let mut waiter = self.shared_state.lock();
         if waiter.stopped {
@@ -156,7 +167,7 @@ impl BatchStorage<BinaryBatch> for FileStorage {
         waiter.occupied_bytes += number_bytes;
         waiter.file_ids.push_back((next_batch_id, number_bytes));
 
-        FileStorage::increment_next_batch_id(&mut waiter)?;
+        CombinedStorage::increment_next_batch_id(&mut waiter)?;
 
         waiter.notify_one();
 
@@ -175,7 +186,7 @@ impl BatchStorage<BinaryBatch> for FileStorage {
             let &batch_id_size = batch_id_opt.unwrap();
 
             let batch_path = self.batch_file_path(batch_id_size.0);
-            let bytes_opt = FileStorage::bytes_from_file(&batch_path)?;
+            let bytes_opt = CombinedStorage::bytes_from_file(&batch_path)?;
             if let Some(bytes) = bytes_opt {
                 return Ok(BinaryBatch { batch_id: batch_id_size.0, bytes });
             }
