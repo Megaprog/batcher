@@ -29,6 +29,44 @@ impl BatchIdGetter for FileStorage {
     }
 }
 
+pub trait StoreBatchMethod: Clone + Send + 'static {
+    fn store_batch(&self, batch: &BinaryBatch) -> io::Result<()>;
+}
+
+pub trait BatchStorageForCombination<B: Deref<Target=BinaryBatch>>: StoreBatchMethod + Clone + Send + 'static {
+    fn get(&self) -> io::Result<B>;
+    fn remove(&self) -> io::Result<()>;
+    fn is_persistent(&self) -> bool;
+    fn is_empty(&self) -> bool;
+    fn shutdown(&self);
+}
+
+impl<B, T> BatchStorageForCombination<B> for T
+    where
+        B: Deref<Target=BinaryBatch>,
+        T: BatchStorage<B> + StoreBatchMethod
+{
+    fn get(&self) -> io::Result<B> {
+        BatchStorage::get(self)
+    }
+
+    fn remove(&self) -> io::Result<()> {
+        <T as BatchStorage<B>>::get()
+    }
+
+    fn is_persistent(&self) -> bool {
+        BatchStorage::is_persistent(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        BatchStorage::is_empty(self)
+    }
+
+    fn shutdown(&self) {
+        BatchStorage::shutdown(self)
+    }
+}
+
 pub struct CombinedStorageSharedState {
     next_batch_id: i64,
     stopped: bool,
