@@ -9,9 +9,11 @@ use log::*;
 use std::io::{Error, ErrorKind, BufRead, Write, Seek, SeekFrom, Read};
 use std::fmt::{Display, Formatter, Debug};
 
+#[macro_export]
 macro_rules! batch_file {
     () => ( "batchFile" )
 }
+#[macro_export]
 macro_rules! file_id_pattern {
     () => ( "{:011}" )
 }

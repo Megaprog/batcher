@@ -1,13 +1,11 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory, BatchId};
 use crate::waiter::{Lock, Waiter};
-use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
-use std::{io, fs, fmt, thread, error};
+use std::{io, fmt, thread};
 use log::*;
-use std::io::{Error, ErrorKind, BufRead, Write, Seek, SeekFrom, Read};
-use std::fmt::{Display, Formatter, Debug};
+use std::io::{Error, ErrorKind, Write, Seek, SeekFrom, Read};
+use std::fmt::{Formatter, Debug};
 use std::ops::Deref;
 use std::thread::JoinHandle;
 use crate::file_storage::FileStorage;
@@ -191,14 +189,9 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()> {
         let mut waiter = self.shared_state.lock();
         if waiter.stopped {
-            return Err(Error::new(ErrorKind::Interrupted, ChainedError::monad(
+            return Err(Error::new(ErrorKind::Interrupted, ChainedError::arc_result(
                 format!("The storage {:?} has been shut down", self),
-                Box::new(waiter.last_result.clone()),
-                Box::new(|any|
-                    any.downcast_ref::<Arc<io::Result<()>>>()
-                        .map(|arc| (**arc).as_ref().err())
-                        .flatten()
-                        .map(|e| e as &(dyn error::Error))))))
+                waiter.last_result.clone())))
         }
 
         let result = self.buffer.store_batch(&batch_factory.create_batch(records, waiter.next_batch_id)?);

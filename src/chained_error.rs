@@ -4,6 +4,7 @@ use crate::chained_error::Source::{Own, Empty};
 use crate::chained_error::Source::Ref;
 use std::fmt::{Formatter, Display};
 use std::any::Any;
+use std::sync::Arc;
 
 
 #[derive(Debug)]
@@ -68,6 +69,21 @@ impl ChainedError {
         ChainedError {
             description: description.into(),
             source: Ref(value, func),
+        }
+    }
+
+    pub fn arc_result<T, E>(description: impl Into<String>, value: Arc<Result<T, E>>) -> ChainedError
+        where
+            T: Send + Sync + 'static,
+            E: Error + Send + Sync + 'static
+    {
+        ChainedError {
+            description: description.into(),
+            source: Ref(Box::new(value), Box::new(|any|
+                any.downcast_ref::<Arc<Result<T, E>>>()
+                    .map(|arc| (**arc).as_ref().err())
+                    .flatten()
+                    .map(|e| e as &(dyn Error))))
         }
     }
 }

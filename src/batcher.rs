@@ -239,14 +239,9 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
     fn check_state(&self, mutex_guard: &MutexGuard<BatcherSharedState<T, Records, Builder>>) -> io::Result<()> {
         if mutex_guard.stopped {
             return Err(Error::new(ErrorKind::Interrupted,
-                                  ChainedError::monad(
+                                  ChainedError::arc_result(
                                       "The batcher has been shut down",
-                                      Box::new(mutex_guard.last_upload_result.clone()),
-                                      Box::new(|any|
-                                          any.downcast_ref::<Arc<io::Result<()>>>()
-                                              .map(|arc| (**arc).as_ref().err())
-                                              .flatten()
-                                              .map(|e| e as &(dyn error::Error))))));
+                                      mutex_guard.last_upload_result.clone())))
         }
         Ok(())
     }
@@ -429,7 +424,7 @@ mod test {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct PersistentMemoryStorage(MemoryStorage);
 
     impl<'a> BatchStorage<Arc<BinaryBatch>> for PersistentMemoryStorage {
