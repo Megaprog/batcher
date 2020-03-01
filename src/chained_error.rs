@@ -77,14 +77,11 @@ impl ChainedError {
             T: Send + Sync + 'static,
             E: Error + Send + Sync + 'static
     {
-        ChainedError {
-            description: description.into(),
-            source: Ref(Box::new(value), Box::new(|any|
-                any.downcast_ref::<Arc<Result<T, E>>>()
-                    .map(|arc| (**arc).as_ref().err())
-                    .flatten()
-                    .map(|e| e as &(dyn Error))))
-        }
+        ChainedError::monad(description, Box::new(value), Box::new(|any|
+            any.downcast_ref::<Arc<Result<T, E>>>()
+                .map(|arc| (**arc).as_ref().err())
+                .flatten()
+                .map(|e| e as &(dyn Error))))
     }
 }
 
