@@ -115,8 +115,7 @@ impl FileStorage {
         self.path.join(BATCH_FILE_NAME_PREFIX.to_owned() + &format!(file_id_pattern!(), file_id))
     }
 
-    fn increment_next_batch_id(waiter: &mut Waiter<FileStorageSharedState>) -> io::Result<()> {
-        waiter.next_batch_id += 1;
+    fn save_next_batch_id(waiter: &mut Waiter<FileStorageSharedState>) -> io::Result<()> {
         waiter.batch_id_file.seek(SeekFrom::Start(0))?;
         let batch_id_str = format!(file_id_pattern!(), waiter.next_batch_id);
         waiter.batch_id_file.write_all(batch_id_str.as_bytes())
@@ -131,17 +130,8 @@ impl FileStorage {
         File::open(path)?.read_to_end(&mut buffer)?;
         if buffer.len() > 0 { Ok(Some(buffer)) } else { Ok(None) }
     }
-}
 
-impl BatchStorage<BinaryBatch> for FileStorage {
-    fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()> {
-        let mut waiter = self.shared_state.lock();
-        if waiter.stopped {
-            return Err(Error::new(ErrorKind::Interrupted, format!("The storage {:?} has been shut down", self)))
-        }
-
-        let next_batch_id = waiter.next_batch_id;
-        let batch = batch_factory.create_batch(records, next_batch_id)?;
+    pub(crate) fn store_batch_inner(&self, batch: &BinaryBatch, waiter: &mut Waiter<FileStorageSharedState>) -> io::Result<()> {
         let number_bytes = batch.bytes.len() as u64;
 
         if waiter.occupied_bytes + number_bytes > self.max_bytes {
@@ -150,17 +140,36 @@ impl BatchStorage<BinaryBatch> for FileStorage {
                                           self, number_bytes, self.max_bytes - waiter.occupied_bytes)))
         }
 
-        let batch_file_path = self.batch_file_path(next_batch_id);
+        let batch_file_path = self.batch_file_path(batch.batch_id);
         OpenOptions::new().write(true).create_new(true).open(&batch_file_path)?.write_all(&batch.bytes)?;
 
         waiter.occupied_bytes += number_bytes;
-        waiter.file_ids.push_back((next_batch_id, number_bytes));
+        waiter.file_ids.push_back((batch.batch_id, number_bytes));
 
-        FileStorage::increment_next_batch_id(&mut waiter)?;
+        waiter.next_batch_id = batch.batch_id + 1;
+        FileStorage::save_next_batch_id(waiter)?;
 
         waiter.notify_one();
 
         Ok(())
+    }
+
+    pub(crate) fn get_waiter(&self) -> io::Result<Waiter<FileStorageSharedState>> {
+        let mut waiter = self.shared_state.lock();
+        if waiter.stopped {
+            return Err(Error::new(ErrorKind::Interrupted, format!("The storage {:?} has been shut down", self)))
+        }
+        Ok(waiter)
+    }
+}
+
+impl BatchStorage<BinaryBatch> for FileStorage {
+    fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()> {
+        let mut waiter = self.get_waiter()?;
+
+        let batch = batch_factory.create_batch(records, waiter.next_batch_id)?;
+
+        self.store_batch_inner(&batch, &mut waiter)
     }
 
     fn get(&self) -> io::Result<BinaryBatch> {
@@ -215,6 +224,7 @@ impl BatchStorage<BinaryBatch> for FileStorage {
         waiter.interrupt();
     }
 }
+
 
 #[cfg(test)]
 mod test_file_storage {

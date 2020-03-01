@@ -130,6 +130,7 @@ BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, Storage, Sender
             if let Err(e) = batch_result {
                 if e.kind() == ErrorKind::Interrupted {
                     if self.should_interrupt(self.shared_state.lock().unwrap()) {
+                        debug!("The upload thread has been interrupted");
                         break;
                     } else {
                         continue;
