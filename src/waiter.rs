@@ -191,10 +191,10 @@ impl<'a, T> AsMut<T> for Waiter<'a, T> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::{Mutex, Arc, TryLockError, LockResult};
+    use std::sync::{Arc, TryLockError};
     use crate::waiter::Lock;
     use std::thread;
-    use std::time::{Duration, SystemTime, Instant};
+    use std::time::{Duration, Instant};
 
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);

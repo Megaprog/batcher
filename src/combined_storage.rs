@@ -1,10 +1,9 @@
 use std::sync::Arc;
 use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory, BatchId};
-use crate::waiter::{Lock, Waiter};
-use std::fs::{File, OpenOptions};
+use crate::waiter::Lock;
 use std::{io, fmt, thread};
 use log::*;
-use std::io::{Error, ErrorKind, Write, Seek, SeekFrom, Read};
+use std::io::{Error, ErrorKind};
 use std::fmt::{Formatter, Debug};
 use std::ops::Deref;
 use std::thread::JoinHandle;
@@ -255,9 +254,13 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     }
 
     fn shutdown(&self) {
-        let mut waiter = self.shared_state.lock();
-        waiter.stopped = true;
-        waiter.interrupt();
+        {
+            let mut waiter = self.shared_state.lock();
+            waiter.stopped = true;
+            waiter.interrupt();
+            waiter.saving_thread.take()
+        }
+            .map(|upload_thread| upload_thread.join().unwrap());
     }
 }
 
@@ -265,14 +268,12 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
 mod test_file_storage {
     use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
     use crate::memory_storage::MemoryStorage;
-    use std::{io, thread};
+    use std::thread;
     use std::time::Duration;
     use crate::file_storage::FileStorage;
     use tempfile::tempdir;
     use crate::memory_storage::test::BATCH_FACTORY;
-    use std::fs::{File, OpenOptions};
     use std::io::Write;
-    use std::path::Path;
     use std::sync::{Once, Arc};
     use env_logger::{Builder, Env};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -303,7 +304,7 @@ mod test_file_storage {
         assert_eq!(vec![1, 2], batch.bytes);
 
         let memory_storage = MemoryStorage::new();
-        let combined_storage = CombinedStorage::new(memory_storage, file_storage.clone())?;
+        let combined_storage = CombinedStorage::new(memory_storage, file_storage.clone()).unwrap();
 
         combined_storage.store(String::new(), &BATCH_FACTORY).unwrap();
         let batch = combined_storage.get().unwrap();

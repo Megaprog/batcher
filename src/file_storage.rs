@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::{io, fs, fmt};
 use log::*;
-use std::io::{Error, ErrorKind, BufRead, Write, Seek, SeekFrom, Read};
-use std::fmt::{Display, Formatter, Debug};
+use std::io::{Error, ErrorKind, Write, Seek, SeekFrom, Read};
+use std::fmt::{Formatter, Debug};
 
 #[macro_export]
 macro_rules! batch_file {
@@ -230,9 +230,8 @@ impl BatchStorage<BinaryBatch> for FileStorage {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
-    use crate::memory_storage::MemoryStorage;
-    use std::{io, thread};
+    use crate::batch_storage::{BatchStorage, BatchFactory};
+    use std::thread;
     use std::time::Duration;
     use crate::file_storage::{FileStorage, NEXT_BATCH_ID_FILE_NAME, BATCH_FILE_NAME_PREFIX};
     use tempfile::tempdir;

@@ -5,7 +5,7 @@ use miniz_oxide::deflate::{compress_to_vec, CompressionLevel};
 use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct BinaryBatch {
     pub batch_id: i64,
     pub bytes: Vec<u8>
