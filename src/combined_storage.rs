@@ -4,7 +4,7 @@ use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory, BatchId};
 use crate::waiter::{Lock, Waiter};
 use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
-use std::{io, fs, fmt, thread};
+use std::{io, fs, fmt, thread, error};
 use log::*;
 use std::io::{Error, ErrorKind, BufRead, Write, Seek, SeekFrom, Read};
 use std::fmt::{Display, Formatter, Debug};
@@ -12,6 +12,7 @@ use std::ops::Deref;
 use std::thread::JoinHandle;
 use crate::file_storage::FileStorage;
 use std::marker::PhantomData;
+use crate::chained_error::ChainedError;
 
 
 pub trait BatchIdGetter: Clone + Send + 'static {
@@ -34,7 +35,7 @@ pub trait StoreBatchMethod: Clone + Send + 'static {
     fn store_batch(&self, batch: &BinaryBatch) -> io::Result<()>;
 }
 
-pub trait BatchStorageForCombination<B: Deref<Target=BinaryBatch>>: StoreBatchMethod + Clone + Send + 'static {
+pub trait BatchStorageForCombination<B: Deref<Target=BinaryBatch>>: StoreBatchMethod + Debug + Clone + Send + 'static {
     fn get(&self) -> io::Result<B>;
     fn remove(&self) -> io::Result<()>;
     fn is_persistent(&self) -> bool;
@@ -100,42 +101,13 @@ impl<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage> Debug for
 CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     where
         BufferBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        BufferStorage: BatchStorageForCombination<BufferBatch> + Debug,
-        PersistentBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        PersistentStorage: BatchStorageForCombination<PersistentBatch> + BatchIdGetter + Debug
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CombinedStorage")
-            .field("buffer", &self.buffer)
-            .field("persistent", &self.persistent)
-            .finish()
-    }
-}
-
-impl<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
-CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
-    where
-        BufferBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
         BufferStorage: BatchStorageForCombination<BufferBatch>,
         PersistentBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
         PersistentStorage: BatchStorageForCombination<PersistentBatch> + BatchIdGetter
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("CombinedStorage")
-            .finish()
-    }
-}
-
-impl<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
-CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
-    where
-        BufferBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        BufferStorage: BatchStorageForCombination<BufferBatch>,
-        PersistentBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        PersistentStorage: BatchStorageForCombination<PersistentBatch> + BatchIdGetter + Debug
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CombinedStorage")
+            .field("buffer", &self.buffer)
             .field("persistent", &self.persistent)
             .finish()
     }
@@ -219,10 +191,15 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()> {
         let mut waiter = self.shared_state.lock();
         if waiter.stopped {
-            return Err(Error::new(ErrorKind::Interrupted, format!("The storage {:?} has been shut down", self)))
+            return Err(Error::new(ErrorKind::Interrupted, ChainedError::monad(
+                format!("The storage {:?} has been shut down", self),
+                Box::new(waiter.last_result.clone()),
+                Box::new(|any|
+                    any.downcast_ref::<Arc<io::Result<()>>>()
+                        .map(|arc| (**arc).as_ref().err())
+                        .flatten()
+                        .map(|e| e as &(dyn error::Error))))))
         }
-
-        (*waiter.last_result)?;
 
         let result = self.buffer.store_batch(&batch_factory.create_batch(records, waiter.next_batch_id)?);
         if result.is_ok() {

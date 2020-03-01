@@ -1,5 +1,5 @@
 use std::io;
-use std::fmt::{Display, Formatter, Error};
+use std::fmt::{Display, Formatter, Error, Debug};
 use std::marker::PhantomData;
 use miniz_oxide::deflate::{compress_to_vec, CompressionLevel};
 use std::ops::Deref;
@@ -37,7 +37,7 @@ impl<R: 'static> BatchFactory<R> for fn(R, i64) -> io::Result<BinaryBatch> {
     }
 }
 
-pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Clone + Send + 'static {
+pub trait BatchStorage<B: Deref<Target=BinaryBatch>>: Debug + Clone + Send + 'static {
     fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()>;
     fn get(&self) -> io::Result<B>;
     fn remove(&self) -> io::Result<()>;

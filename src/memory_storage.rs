@@ -4,6 +4,8 @@ use std::io;
 use std::sync::Arc;
 use std::io::{Error, ErrorKind};
 use crate::waiter::{Waiter, Lock};
+use std::fmt::{Debug, Formatter};
+use core::fmt;
 
 const DEFAULT_MAX_BYTES_IN_QUEUE: usize = 64 * 1024 * 1024;
 
@@ -79,6 +81,14 @@ impl MemoryStorageThis for Base {
         waiter.notify_one();
 
         return Ok(());
+    }
+}
+
+impl Debug for NonBlockingMemoryStorage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NonBlockingMemoryStorage")
+            .field("max_bytes", &self.max_bytes)
+            .finish()
     }
 }
 
@@ -171,6 +181,14 @@ impl MemoryStorage {
         let mut non_blocking_memory_storage = NonBlockingMemoryStorage::with_max_bytes(max_bytes);
         non_blocking_memory_storage.this = Arc::new(Blocking(Box::new(Base)));
         MemoryStorage(non_blocking_memory_storage)
+    }
+}
+
+impl Debug for MemoryStorage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryStorage")
+            .field("max_bytes", &self.0.max_bytes)
+            .finish()
     }
 }
 
