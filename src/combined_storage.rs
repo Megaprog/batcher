@@ -11,6 +11,7 @@ use std::thread::JoinHandle;
 use crate::file_storage::FileStorage;
 use std::marker::PhantomData;
 use crate::chained_error::ChainedError;
+use crate::memory_storage::{NonBlockingMemoryStorage, MemoryStorage};
 
 
 pub trait BatchIdGetter: Clone + Send + 'static {
@@ -30,21 +31,48 @@ impl BatchIdGetter for FileStorage {
 }
 
 pub trait StoreBatchMethod: Clone + Send + 'static {
-    fn store_batch(&self, batch: &BinaryBatch) -> io::Result<()>;
+    fn store_batch(&self, batch: BinaryBatch) -> io::Result<()>;
 }
 
-pub trait BatchStorageForCombination<B: Deref<Target=BinaryBatch>>: StoreBatchMethod + Debug + Clone + Send + 'static {
+pub trait StoreBatchRefMethod: Clone + Send + 'static {
+    fn store_batch_ref(&self, batch: &BinaryBatch) -> io::Result<()>;
+}
+
+pub trait BatchStorageBuffer<B: Deref<Target=BinaryBatch>>: StoreBatchMethod + Debug + Clone + Send + 'static {
+    fn get(&self) -> io::Result<B>;
+    fn remove(&self) -> io::Result<()>;
+    fn is_empty(&self) -> bool;
+}
+
+impl<B, T> BatchStorageBuffer<B> for T
+    where
+        B: Deref<Target=BinaryBatch>,
+        T: BatchStorage<B> + StoreBatchMethod
+{
+    fn get(&self) -> io::Result<B> {
+        BatchStorage::get(self)
+    }
+
+    fn remove(&self) -> io::Result<()> {
+        BatchStorage::remove(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        BatchStorage::is_empty(self)
+    }
+}
+
+pub trait BatchStoragePersistent<B: Deref<Target=BinaryBatch>>: StoreBatchRefMethod + Debug + Clone + Send + 'static {
     fn get(&self) -> io::Result<B>;
     fn remove(&self) -> io::Result<()>;
     fn is_persistent(&self) -> bool;
     fn is_empty(&self) -> bool;
-    fn shutdown(&self);
 }
 
-impl<B, T> BatchStorageForCombination<B> for T
+impl<B, T> BatchStoragePersistent<B> for T
     where
         B: Deref<Target=BinaryBatch>,
-        T: BatchStorage<B> + StoreBatchMethod
+        T: BatchStorage<B> + StoreBatchRefMethod
 {
     fn get(&self) -> io::Result<B> {
         BatchStorage::get(self)
@@ -61,15 +89,23 @@ impl<B, T> BatchStorageForCombination<B> for T
     fn is_empty(&self) -> bool {
         BatchStorage::is_empty(self)
     }
+}
 
-    fn shutdown(&self) {
-        BatchStorage::shutdown(self)
+impl StoreBatchRefMethod for FileStorage {
+    fn store_batch_ref(&self, batch: &BinaryBatch) -> io::Result<()> {
+        self.store_batch_inner(batch, &mut self.get_waiter()?)
     }
 }
 
-impl StoreBatchMethod for FileStorage {
-    fn store_batch(&self, batch: &BinaryBatch) -> io::Result<()> {
-        self.store_batch_inner(batch, &mut self.get_waiter()?)
+impl StoreBatchMethod for NonBlockingMemoryStorage {
+    fn store_batch(&self, batch: BinaryBatch) -> io::Result<()> {
+        self.this.store_batch(self, batch, self.shared_state.lock())
+    }
+}
+
+impl StoreBatchMethod for MemoryStorage {
+    fn store_batch(&self, batch: BinaryBatch) -> io::Result<()> {
+        self.0.this.store_batch(&self.0, batch, self.0.shared_state.lock())
     }
 }
 
@@ -84,9 +120,9 @@ pub struct CombinedStorageSharedState {
 pub struct CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     where
         BufferBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        BufferStorage: BatchStorageForCombination<BufferBatch>,
+        BufferStorage: BatchStorageBuffer<BufferBatch>,
         PersistentBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        PersistentStorage: BatchStorageForCombination<PersistentBatch> + BatchIdGetter
+        PersistentStorage: BatchStoragePersistent<PersistentBatch> + BatchIdGetter
 {
     buffer: BufferStorage,
     persistent: PersistentStorage,
@@ -99,9 +135,9 @@ impl<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage> Debug for
 CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     where
         BufferBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        BufferStorage: BatchStorageForCombination<BufferBatch>,
+        BufferStorage: BatchStorageBuffer<BufferBatch>,
         PersistentBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        PersistentStorage: BatchStorageForCombination<PersistentBatch> + BatchIdGetter
+        PersistentStorage: BatchStoragePersistent<PersistentBatch> + BatchIdGetter
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("CombinedStorage")
@@ -115,9 +151,9 @@ impl<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
 CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     where
         BufferBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        BufferStorage: BatchStorageForCombination<BufferBatch>,
+        BufferStorage: BatchStorageBuffer<BufferBatch>,
         PersistentBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        PersistentStorage: BatchStorageForCombination<PersistentBatch> + BatchIdGetter
+        PersistentStorage: BatchStoragePersistent<PersistentBatch> + BatchIdGetter
 {
     pub fn new(buffer: BufferStorage, persistent: PersistentStorage) -> io::Result<CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>> {
         let next_batch_id = persistent.next_batch_id()?;
@@ -157,7 +193,7 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
                 break
             }
 
-            if let Err(e) = self.persistent.store_batch(&get_result.unwrap()) {
+            if let Err(e) = self.persistent.store_batch_ref(&get_result.unwrap()) {
                 error!("Error while store batch to the persistent storage: {}", e);
                 self.shared_state.lock().last_result = Arc::new(Err(e));
                 self.shutdown();
@@ -182,9 +218,9 @@ impl<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage> BatchStorag
 CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     where
         BufferBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        BufferStorage: BatchStorageForCombination<BufferBatch>,
+        BufferStorage: BatchStorageBuffer<BufferBatch>,
         PersistentBatch: Deref<Target=BinaryBatch> + Clone + Send + 'static,
-        PersistentStorage: BatchStorageForCombination<PersistentBatch> + BatchIdGetter
+        PersistentStorage: BatchStoragePersistent<PersistentBatch> + BatchIdGetter
 {
     fn store<R>(&self, records: R, batch_factory: &impl BatchFactory<R>) -> io::Result<()> {
         let mut waiter = self.shared_state.lock();
@@ -194,7 +230,7 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
                 waiter.last_result.clone())))
         }
 
-        let result = self.buffer.store_batch(&batch_factory.create_batch(records, waiter.next_batch_id)?);
+        let result = self.buffer.store_batch(batch_factory.create_batch(records, waiter.next_batch_id)?);
         if result.is_ok() {
             waiter.next_batch_id += 1;
         }
@@ -240,6 +276,7 @@ mod test_file_storage {
     use std::sync::{Once, Arc};
     use env_logger::{Builder, Env};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::combined_storage::CombinedStorage;
 
     static INIT: Once = Once::new();
 
@@ -255,9 +292,9 @@ mod test_file_storage {
     fn scenario() {
         init_log();
         let dir = tempdir().unwrap();
-        let mut f1 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
+        let mut f1 = crate::file_storage::test::open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
         f1.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();
-        let mut f2 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 2));
+        let mut f2 = crate::file_storage::test::open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 2));
         f2.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();
         let file_storage = FileStorage::init(dir.path()).unwrap();
 
@@ -265,40 +302,32 @@ mod test_file_storage {
         assert_eq!(1, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        file_storage.store(String::new(), &BATCH_FACTORY).unwrap();
-        let batch = file_storage.get().unwrap();
+        let memory_storage = MemoryStorage::new();
+        let combined_storage = CombinedStorage::new(memory_storage, file_storage.clone())?;
+
+        combined_storage.store(String::new(), &BATCH_FACTORY).unwrap();
+        let batch = combined_storage.get().unwrap();
         //the same batch
         assert_eq!(1, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
         //again
-        let batch = file_storage.get().unwrap();
+        let batch = combined_storage.get().unwrap();
         assert_eq!(1, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        file_storage.remove();
-        let batch = file_storage.get().unwrap();
+        combined_storage.remove();
+        let batch = combined_storage.get().unwrap();
         assert_eq!(2, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        file_storage.remove();
-        let batch = file_storage.get().unwrap();
+        combined_storage.remove();
+        let batch = combined_storage.get().unwrap();
         assert_eq!(3, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        file_storage.remove();
+        combined_storage.remove();
+        assert!(combined_storage.is_empty());
         assert!(file_storage.shared_state.lock().file_ids.is_empty());
-    }
-
-    fn open_next_batch_id_file(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> File {
-        OpenOptions::new().write(true).create(true)
-            .open(dir.as_ref().join(path)).unwrap()
-    }
-
-    #[test]
-    fn capacity_exceeded() {
-        let dir = tempdir();
-        let file_storage = FileStorage::init_with_max_bytes(dir.as_ref().unwrap().path(), 1).unwrap();
-        assert!(file_storage.store(String::new(), &BATCH_FACTORY).is_err());
     }
 
     #[test]

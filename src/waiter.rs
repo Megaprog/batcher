@@ -4,7 +4,6 @@ use std::{io, thread};
 use std::io::{Error, ErrorKind};
 use std::thread::ThreadId;
 use std::time::Duration;
-use std::env::set_current_dir;
 
 #[derive(Debug)]
 struct Interruption {

@@ -229,7 +229,7 @@ impl BatchStorage<BinaryBatch> for FileStorage {
 
 
 #[cfg(test)]
-mod test_file_storage {
+pub(crate) mod test {
     use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
     use crate::memory_storage::MemoryStorage;
     use std::{io, thread};
@@ -329,7 +329,7 @@ mod test_file_storage {
         assert!(file_storage.shared_state.lock().file_ids.is_empty());
     }
 
-    fn open_next_batch_id_file(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> File {
+    pub(crate) fn open_next_batch_id_file(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> File {
         OpenOptions::new().write(true).create(true)
             .open(dir.as_ref().join(path)).unwrap()
     }

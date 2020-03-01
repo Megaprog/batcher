@@ -2,12 +2,12 @@ use crate::batch_storage::{BatchStorage, BinaryBatch, BatchFactory};
 use crate::chained_error::ChainedError;
 use crate::batch_records::{RecordsBuilder, RecordsBuilderFactory};
 use std::time::{Duration, SystemTime};
-use std::{io, thread, error, mem};
+use std::{io, thread, mem};
 use crate::batch_sender::BatchSender;
 use std::ops::Deref;
 use std::thread::JoinHandle;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex, MutexGuard, Barrier};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::io::{Error, ErrorKind};
 use log::*;
 

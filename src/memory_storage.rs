@@ -16,7 +16,7 @@ pub struct MemoryStorageSharedState {
     stopped: bool,
 }
 
-trait MemoryStorageThis {
+pub(crate) trait MemoryStorageThis {
     fn is_capacity_exceeded(&self, memory_storage: &NonBlockingMemoryStorage, batch: &BinaryBatch,
                             waiter: &mut Waiter<MemoryStorageSharedState>) -> io::Result<bool>;
     fn store_batch(&self, memory_storage: &NonBlockingMemoryStorage, batch: BinaryBatch,
@@ -29,7 +29,7 @@ trait MemoryStorageThis {
 pub struct NonBlockingMemoryStorage {
     pub max_bytes: usize,
     pub clock: fn() -> i64,
-    this: Arc<dyn MemoryStorageThis + Send + Sync>,
+    pub(crate) this: Arc<dyn MemoryStorageThis + Send + Sync>,
     pub(crate) shared_state: Arc<Lock<MemoryStorageSharedState>>
 }
 
@@ -94,36 +94,36 @@ impl Debug for NonBlockingMemoryStorage {
 
 impl BatchStorage<Arc<BinaryBatch>> for NonBlockingMemoryStorage {
     fn store<T>(&self, actions: T, batch_factory: &impl BatchFactory<T>) -> io::Result<()> {
-        let guard = self.shared_state.lock();
+        let waiter = self.shared_state.lock();
 
         let epoch = (self.clock)();
-        let batch_id = if epoch > guard.previous_batch_id {
+        let batch_id = if epoch > waiter.previous_batch_id {
             epoch
         } else {
-            guard.previous_batch_id + 1
+            waiter.previous_batch_id + 1
         };
 
-        self.this.store_batch(self, batch_factory.create_batch(actions, batch_id)?, guard)
+        self.this.store_batch(self, batch_factory.create_batch(actions, batch_id)?, waiter)
     }
 
     fn get(&self) -> io::Result<Arc<BinaryBatch>> {
-        let mut guard = self.shared_state.lock();
+        let mut waiter = self.shared_state.lock();
         loop {
-            if let Some(batch) = guard.batches_queue.front() {
+            if let Some(batch) = waiter.batches_queue.front() {
                 return Ok(Arc::clone(batch));
             }
-            guard.wait()?;
+            waiter.wait()?;
         }
     }
 
     fn remove(&self) -> io::Result<()> {
-        let mut guard = self.shared_state.lock();
-        let batch_opt = guard.batches_queue.pop_front();
+        let mut waiter = self.shared_state.lock();
+        let batch_opt = waiter.batches_queue.pop_front();
         if let Some(batch) = batch_opt {
-            guard.occupied_bytes -= batch.bytes.len();
+            waiter.occupied_bytes -= batch.bytes.len();
         }
 
-        self.this.notify_after_remove(self, &guard);
+        self.this.notify_after_remove(self, &waiter);
         Ok(())
     }
 
@@ -170,7 +170,7 @@ impl MemoryStorageThis for Blocking {
 }
 
 #[derive(Clone)]
-pub struct MemoryStorage(pub NonBlockingMemoryStorage);
+pub struct MemoryStorage(pub(crate) NonBlockingMemoryStorage);
 
 impl MemoryStorage {
     pub fn new() -> MemoryStorage {
@@ -303,7 +303,7 @@ mod test_memory_storage {
 }
 
 #[cfg(test)]
-pub mod test {
+pub(crate) mod test {
     use crate::batch_storage::{BatchStorage, BinaryBatch};
     use std::thread::JoinHandle;
     use std::{thread, io};
