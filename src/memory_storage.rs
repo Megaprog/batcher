@@ -313,29 +313,30 @@ pub(crate) mod test {
 
     pub(crate) static BATCH_FACTORY: fn(String, i64) -> io::Result<BinaryBatch> = |actions, batch_id| Ok(BinaryBatch { batch_id, bytes: vec![1, 2]});
 
-    pub(crate) fn producer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(memory_storage: T) {
-        assert!(memory_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
-        assert!(!memory_storage.is_empty());
+    pub(crate) fn producer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(storage: T) {
+        assert!(storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
+        thread::sleep(Duration::from_millis(5));
+        assert!(!storage.is_empty());
 
-        let consumer_thread = start_consumer_thread(memory_storage.clone());
+        let consumer_thread = start_consumer_thread(storage.clone());
         consumer_thread.join().unwrap();
 
-        assert!(memory_storage.is_empty());
+        assert!(storage.is_empty());
     }
 
-    pub(crate) fn consumer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(memory_storage: T) {
-        let consumer_thread = start_consumer_thread(memory_storage.clone());
+    pub(crate) fn consumer_first<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(storage: T) {
+        let consumer_thread = start_consumer_thread(storage.clone());
         thread::sleep(Duration::from_millis(1));
 
-        assert!(memory_storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
+        assert!(storage.store("Test".to_string(), &BATCH_FACTORY).is_ok());
 
         consumer_thread.join().unwrap();
 
-        assert!(memory_storage.is_empty());
+        assert!(storage.is_empty());
     }
 
-    pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(memory_storage: T) {
-        let cloned_storage = memory_storage.clone();
+    pub(crate) fn shutdown<B: Deref<Target=BinaryBatch> + Send + 'static, T: BatchStorage<B> + Clone + Send + 'static>(storage: T) {
+        let cloned_storage = storage.clone();
         let consumer_thread = thread::spawn(move || {
             let get_result = cloned_storage.get();
             cloned_storage.remove().unwrap();
@@ -343,16 +344,16 @@ pub(crate) mod test {
         });
 
         thread::sleep(Duration::from_millis(1));
-        memory_storage.clone().shutdown();
+        storage.clone().shutdown();
 
         let thread_result = consumer_thread.join().unwrap();
         assert!(thread_result.is_err());
         assert_eq!(ErrorKind::Interrupted, thread_result.err().unwrap().kind());
 
-        let store_result = memory_storage.store("Test".to_string(), &BATCH_FACTORY);
+        let store_result = storage.store("Test".to_string(), &BATCH_FACTORY);
         assert!(store_result.is_err());
         assert_eq!(ErrorKind::Interrupted, store_result.err().unwrap().kind());
-        assert!(memory_storage.is_empty());
+        assert!(storage.is_empty());
     }
 
     pub(crate) fn start_consumer_thread<B: Deref<Target=BinaryBatch>, T: BatchStorage<B> + Clone + Send + 'static>(cloned_storage: T) -> JoinHandle<()> {

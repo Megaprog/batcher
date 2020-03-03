@@ -265,7 +265,7 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
 }
 
 #[cfg(test)]
-mod test_file_storage {
+mod test {
     use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
     use crate::memory_storage::MemoryStorage;
     use std::thread;
@@ -335,10 +335,12 @@ mod test_file_storage {
     fn blocks_forever() {
         let dir = tempdir().unwrap();
         let file_storage = FileStorage::init(dir.path()).unwrap();
+        let memory_storage = MemoryStorage::new();
+        let combined_storage = CombinedStorage::new(memory_storage, file_storage).unwrap();
 
         let working = Arc::new(AtomicBool::new(true));
 
-        let cloned_storage = file_storage.clone();
+        let cloned_storage = combined_storage.clone();
         let cloned_working = working.clone();
         let join_handle = thread::spawn(move || {
             cloned_storage.get().unwrap();
@@ -354,20 +356,26 @@ mod test_file_storage {
     fn producer_first() {
         let dir = tempdir().unwrap();
         let file_storage = FileStorage::init(dir.path()).unwrap();
-        crate::memory_storage::test::producer_first(file_storage);
+        let memory_storage = MemoryStorage::new();
+        let combined_storage = CombinedStorage::new(memory_storage, file_storage).unwrap();
+        crate::memory_storage::test::producer_first(combined_storage);
     }
 
     #[test]
     fn consumer_first() {
         let dir = tempdir().unwrap();
         let file_storage = FileStorage::init(dir.path()).unwrap();
-        crate::memory_storage::test::consumer_first(file_storage);
+        let memory_storage = MemoryStorage::new();
+        let combined_storage = CombinedStorage::new(memory_storage, file_storage).unwrap();
+        crate::memory_storage::test::consumer_first(combined_storage);
     }
 
     #[test]
     fn shutdown() {
         let dir = tempdir().unwrap();
         let file_storage = FileStorage::init(dir.path()).unwrap();
-        crate::memory_storage::test::shutdown(file_storage);
+        let memory_storage = MemoryStorage::new();
+        let combined_storage = CombinedStorage::new(memory_storage, file_storage).unwrap();
+        crate::memory_storage::test::shutdown(combined_storage);
     }
 }
