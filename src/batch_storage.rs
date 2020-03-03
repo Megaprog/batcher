@@ -26,6 +26,8 @@ impl Display for BinaryBatch {
 }
 
 pub type BatchId = i64;
+//TODO Waiting on https://github.com/rust-lang/rust/issues/63063
+//pub type BatchHolder = impl Deref<Target=BinaryBatch> + Clone + Send + 'static;
 
 pub trait BatchFactory<R>: Clone + Send + 'static {
     fn create_batch(&self, records: R, batch_id: BatchId) -> io::Result<BinaryBatch>;
