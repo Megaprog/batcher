@@ -41,6 +41,7 @@ pub trait BatchStorageBuffer<B: Deref<Target=BinaryBatch>>: StoreBatchMethod + D
     fn get(&self) -> io::Result<B>;
     fn remove(&self) -> io::Result<()>;
     fn is_empty(&self) -> bool;
+    fn shutdown(&self);
 }
 
 impl<B, T> BatchStorageBuffer<B> for T
@@ -59,6 +60,10 @@ impl<B, T> BatchStorageBuffer<B> for T
     fn is_empty(&self) -> bool {
         BatchStorage::is_empty(self)
     }
+
+    fn shutdown(&self) {
+        BatchStorage::shutdown(self);
+    }
 }
 
 pub trait BatchStoragePersistent<B: Deref<Target=BinaryBatch>>: StoreBatchRefMethod + Debug + Clone + Send + 'static {
@@ -66,6 +71,7 @@ pub trait BatchStoragePersistent<B: Deref<Target=BinaryBatch>>: StoreBatchRefMet
     fn remove(&self) -> io::Result<()>;
     fn is_persistent(&self) -> bool;
     fn is_empty(&self) -> bool;
+    fn shutdown(&self);
 }
 
 impl<B, T> BatchStoragePersistent<B> for T
@@ -87,6 +93,10 @@ impl<B, T> BatchStoragePersistent<B> for T
 
     fn is_empty(&self) -> bool {
         BatchStorage::is_empty(self)
+    }
+
+    fn shutdown(&self) {
+        BatchStorage::shutdown(self);
     }
 }
 
@@ -257,6 +267,8 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
         {
             let mut waiter = self.shared_state.lock();
             waiter.stopped = true;
+            self.buffer.shutdown();
+            self.persistent.shutdown();
             waiter.interrupt();
             waiter.saving_thread.take()
         }
