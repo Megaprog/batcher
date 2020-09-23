@@ -561,7 +561,7 @@ mod test {
             cloned_batcher.hard_stop().unwrap()
         });
 
-        thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(40));
         validate_batches_queue2(&memory_storage);
 
         batch_sender.0.store(true, Ordering::Relaxed);
@@ -606,7 +606,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(40));
 
         let batches_guard = batch_sender.batches.lock().unwrap();
         assert_eq!(batches_guard.len(), 1);
@@ -719,7 +719,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(40));
 
         batcher.hard_stop().unwrap();
 
@@ -779,7 +779,7 @@ mod test {
         batcher.put("test1").unwrap();
         batcher.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(40));
 
         let result = batcher.put("test2");
         assert!(result.is_err());
@@ -815,7 +815,7 @@ mod test {
             cloned_batcher.hard_stop().unwrap()
         });
 
-        thread::sleep(Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(40));
         validate_batches_queue2(&memory_storage);
 
         batch_sender.0.store(true, Ordering::Relaxed);
