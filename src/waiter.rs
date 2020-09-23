@@ -216,7 +216,7 @@ mod test {
             Instant::now().duration_since(start)
         });
 
-        thread::sleep(Duration::from_millis(6));
+        thread::sleep(Duration::from_millis(40));
         drop(waiter);
 
         let duration = join_handle.join().unwrap();
