@@ -312,15 +312,15 @@ Batcher<T> for BatcherImpl<T, Records, Builder, BuilderFactory, Batch, Factory, 
         true
     }
 
-    fn stop(mut self) -> io::Result<()> {
+    fn stop(self) -> io::Result<()> {
         self.stop_inner(false, false)
     }
 
-    fn hard_stop(mut self) -> io::Result<()> {
+    fn hard_stop(self) -> io::Result<()> {
         self.stop_inner(true, false)
     }
 
-    fn soft_stop(mut self) -> io::Result<()> {
+    fn soft_stop(self) -> io::Result<()> {
         self.stop_inner(false, true)
     }
 
@@ -486,7 +486,7 @@ mod test {
     #[test]
     fn test_drop() {
         init();
-        let mut batcher = BatcherImpl::new(
+        let batcher = BatcherImpl::new(
             RECORDS_BUILDER_FACTORY,
             GzippedJsonDisplayBatchFactory::new("s1"),
             MemoryStorage::new(),

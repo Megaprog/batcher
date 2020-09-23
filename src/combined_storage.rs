@@ -167,7 +167,7 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
     pub fn new(buffer: BufferStorage, persistent: PersistentStorage) -> io::Result<CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>> {
         let next_batch_id = persistent.next_batch_id()?;
 
-        let mut storage = CombinedStorage {
+        let storage = CombinedStorage {
             buffer,
             persistent,
             shared_state: Arc::new(Lock::new(CombinedStorageSharedState {
@@ -278,7 +278,7 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
 
 #[cfg(test)]
 mod test {
-    use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory};
+    use crate::batch_storage::{BatchStorage, BatchFactory};
     use crate::memory_storage::MemoryStorage;
     use std::thread;
     use std::time::Duration;

@@ -157,7 +157,7 @@ impl FileStorage {
     }
 
     pub(crate) fn get_waiter(&self) -> io::Result<Waiter<FileStorageSharedState>> {
-        let mut waiter = self.shared_state.lock();
+        let waiter = self.shared_state.lock();
         if waiter.stopped {
             return Err(Error::new(ErrorKind::Interrupted, format!("The storage {:?} has been shut down", self)))
         }
@@ -233,7 +233,7 @@ pub(crate) mod test {
     use crate::batch_storage::{BatchStorage, BatchFactory};
     use std::thread;
     use std::time::Duration;
-    use crate::file_storage::{FileStorage, NEXT_BATCH_ID_FILE_NAME, BATCH_FILE_NAME_PREFIX};
+    use crate::file_storage::{FileStorage, NEXT_BATCH_ID_FILE_NAME};
     use tempfile::tempdir;
     use crate::memory_storage::test::BATCH_FACTORY;
     use std::fs::{File, OpenOptions};

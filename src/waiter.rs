@@ -97,7 +97,6 @@ impl<'a, T> Waiter<'a, T> {
     }
 
     pub fn wait(&mut self) -> io::Result<()> {
-        let condvar = self.condvar;
         self.wait_safe().unwrap()
     }
 
@@ -109,7 +108,6 @@ impl<'a, T> Waiter<'a, T> {
     }
 
     pub fn wait_timeout(&mut self, dur: Duration) -> io::Result<WaitTimeoutResult> {
-        let condvar = self.condvar;
         self.wait_timeout_safe(dur).unwrap()
     }
 
@@ -228,7 +226,7 @@ mod test {
     #[test]
     fn try_lock() {
         let lock = Arc::new(Lock::new(()));
-        let waiter = lock.lock();
+        let _waiter = lock.lock();
 
         let moved_lock = lock.clone();
         let join_handle = thread::spawn(move|| {
@@ -255,7 +253,7 @@ mod test {
         let lock = Arc::new(Lock::new(NonCopy(10)));
         let cloned_lock = lock.clone();
         let _ = thread::spawn(move || {
-            let w = cloned_lock.lock();
+            let _w = cloned_lock.lock();
             panic!("test panic in inner thread to poison mutex");
         }).join();
 
