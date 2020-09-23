@@ -237,7 +237,7 @@ pub(crate) mod test {
     use tempfile::tempdir;
     use crate::memory_storage::test::BATCH_FACTORY;
     use std::fs::{File, OpenOptions};
-    use std::io::Write;
+    use std::io::{Write, Error};
     use std::path::Path;
     use std::sync::{Once, Arc};
     use env_logger::{Builder, Env};
@@ -291,7 +291,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn scenario() {
+    fn scenario() -> Result<(), Error> {
         init_log();
         let dir = tempdir().unwrap();
         let mut f1 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
@@ -314,18 +314,20 @@ pub(crate) mod test {
         assert_eq!(1, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        file_storage.remove();
+        file_storage.remove()?;
         let batch = file_storage.get().unwrap();
         assert_eq!(2, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        file_storage.remove();
+        file_storage.remove()?;
         let batch = file_storage.get().unwrap();
         assert_eq!(3, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        file_storage.remove();
+        file_storage.remove()?;
         assert!(file_storage.shared_state.lock().file_ids.is_empty());
+
+        Ok(())
     }
 
     pub(crate) fn open_next_batch_id_file(dir: impl AsRef<Path>, path: impl AsRef<Path>) -> File {

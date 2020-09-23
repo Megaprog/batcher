@@ -285,7 +285,7 @@ mod test {
     use crate::file_storage::FileStorage;
     use tempfile::tempdir;
     use crate::memory_storage::test::BATCH_FACTORY;
-    use std::io::Write;
+    use std::io::{Write, Error};
     use std::sync::{Once, Arc};
     use env_logger::{Builder, Env};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -302,7 +302,7 @@ mod test {
     }
 
     #[test]
-    fn scenario() {
+    fn scenario() -> Result<(), Error> {
         init_log();
         let dir = tempdir().unwrap();
         let mut f1 = crate::file_storage::test::open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
@@ -328,19 +328,21 @@ mod test {
         assert_eq!(1, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        combined_storage.remove();
+        combined_storage.remove()?;
         let batch = combined_storage.get().unwrap();
         assert_eq!(2, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        combined_storage.remove();
+        combined_storage.remove()?;
         let batch = combined_storage.get().unwrap();
         assert_eq!(3, batch.batch_id);
         assert_eq!(vec![1, 2], batch.bytes);
 
-        combined_storage.remove();
+        combined_storage.remove()?;
         assert!(combined_storage.is_empty());
         assert!(file_storage.shared_state.lock().file_ids.is_empty());
+
+        Ok(())
     }
 
     #[test]
