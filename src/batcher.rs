@@ -373,11 +373,11 @@ mod test {
     use crate::batch_records::{RECORDS_BUILDER_FACTORY, JsonArrayRecordsBuilder, JsonArrayRecordsBuilderFactory};
     use std::{thread, io};
     use std::time::{Duration, SystemTime};
-    use std::sync::{Once, Arc, Mutex};
-    use env_logger::{Builder, Env};
+    use std::sync::{Arc, Mutex};
     use miniz_oxide::inflate::decompress_to_vec;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::collections::VecDeque;
+    use crate::init_test_logging;
 
     #[derive(Clone)]
     struct MockBatchSender {
@@ -453,14 +453,8 @@ mod test {
     const BATCH2: &str = r#"{"serverId":s1,"batchId":2,"batch":[test2]}"#;
     const BATCH12: &str = r#"{"serverId":s1,"batchId":1,"batch":[test1,test2]}"#;
 
-    static INIT: Once = Once::new();
-
     fn init() {
-        INIT.call_once(|| {
-            Builder::from_env(Env::default().default_filter_or("trace")).is_test(true)
-                .format_timestamp_millis()
-                .init();
-        });
+        init_test_logging();
     }
 
     fn memory_storage() -> MemoryStorage {

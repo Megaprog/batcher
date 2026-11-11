@@ -1,16 +1,16 @@
-use std::sync::Arc;
-use crate::batch_storage::{BinaryBatch, BatchStorage, BatchFactory, BatchId};
-use crate::waiter::Lock;
-use std::{io, fmt, thread};
-use log::*;
-use std::io::{Error, ErrorKind};
-use std::fmt::{Formatter, Debug};
-use std::ops::Deref;
-use std::thread::JoinHandle;
-use crate::file_storage::FileStorage;
-use std::marker::PhantomData;
+use crate::batch_storage::{BatchFactory, BatchId, BatchStorage, BinaryBatch};
 use crate::chained_error::ChainedError;
-use crate::memory_storage::{NonBlockingMemoryStorage, MemoryStorage};
+use crate::file_storage::FileStorage;
+use crate::memory_storage::{MemoryStorage, NonBlockingMemoryStorage};
+use crate::waiter::Lock;
+use log::*;
+use std::fmt::{Debug, Formatter};
+use std::io::{Error, ErrorKind};
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::{fmt, io, thread};
 
 
 pub trait BatchIdGetter: Clone + Send + 'static {
@@ -278,32 +278,22 @@ CombinedStorage<BufferBatch, BufferStorage, PersistentBatch, PersistentStorage>
 
 #[cfg(test)]
 mod test {
-    use crate::batch_storage::{BatchStorage, BatchFactory};
+    use crate::batch_storage::{BatchFactory, BatchStorage};
+    use crate::combined_storage::CombinedStorage;
+    use crate::file_storage::FileStorage;
+    use crate::init_test_logging;
+    use crate::memory_storage::test::BATCH_FACTORY;
     use crate::memory_storage::MemoryStorage;
+    use std::io::{Error, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
-    use crate::file_storage::FileStorage;
     use tempfile::tempdir;
-    use crate::memory_storage::test::BATCH_FACTORY;
-    use std::io::{Write, Error};
-    use std::sync::{Once, Arc};
-    use env_logger::{Builder, Env};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use crate::combined_storage::CombinedStorage;
-
-    static INIT: Once = Once::new();
-
-    fn init_log() {
-        INIT.call_once(|| {
-            Builder::from_env(Env::default().default_filter_or("trace")).is_test(true)
-                .format_timestamp_millis()
-                .init();
-        });
-    }
 
     #[test]
     fn scenario() -> Result<(), Error> {
-        init_log();
+        init_test_logging();
         let dir = tempdir().unwrap();
         let mut f1 = crate::file_storage::test::open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
         f1.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();

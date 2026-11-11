@@ -239,19 +239,9 @@ pub(crate) mod test {
     use std::fs::{File, OpenOptions};
     use std::io::{Write, Error};
     use std::path::Path;
-    use std::sync::{Once, Arc};
-    use env_logger::{Builder, Env};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-
-    static INIT: Once = Once::new();
-
-    fn init_log() {
-        INIT.call_once(|| {
-            Builder::from_env(Env::default().default_filter_or("trace")).is_test(true)
-                .format_timestamp_millis()
-                .init();
-        });
-    }
+    use crate::init_test_logging;
 
     #[test]
     fn zero_next_batch_id() {
@@ -292,7 +282,7 @@ pub(crate) mod test {
 
     #[test]
     fn scenario() -> Result<(), Error> {
-        init_log();
+        init_test_logging();
         let dir = tempdir().unwrap();
         let mut f1 = open_next_batch_id_file(&dir, format!(concat!(batch_file!(), "-", file_id_pattern!()), 1));
         f1.write_all(&BATCH_FACTORY.create_batch(String::new(), 1).unwrap().bytes).unwrap();

@@ -14,6 +14,14 @@ mod chained_error;
 mod batch_records;
 mod batcher;
 
+#[cfg(test)]
+pub(crate) fn init_test_logging() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
+        .is_test(true)
+        .format_timestamp_millis()
+        .try_init();
+}
+
 pub fn handle_connection(mut stream: &TcpStream) -> io::Result<()> {
     let body = r#"{"serverId":"meta", "batchId":"0", "batch":[{
 "action":"trackEvent",
